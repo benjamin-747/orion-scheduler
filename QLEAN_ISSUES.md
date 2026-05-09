@@ -208,18 +208,11 @@ pub async fn with_machine<'a, F, R>(image: &'a Image, config: &'a MachineConfig,
 }
 ```
 
-## 修复建议汇总
+## 5. VM 启动优化建议
 
-| 问题 | 优先级 | 建议修复方案 |
-|------|--------|--------------|
-| KVM OnceLock 缓存 | 高 | 移除全局缓存，每次 VM 检查 |
-| 目录权限 | 中 | 遵守 XDG_DATA_HOME，使用当前用户目录 |
-| Guest CID 冲突 | 低 | 启动时清理或动态 CID |
-| KVM 检测时序 | 中 | 在 VM 启动前懒加载检查 |
-| SSH 超时硬编码 | 高 | 支持配置化超时，或减少无 KVM 时的 180 秒超时 |
-| 优雅关闭信号处理 | 中 | 支持 SIGTERM/SIGQUIT，不只是 SIGINT |
+### 问题现象
 
-## 6. VM 启动优化建议
+无 KVM 时 VM 启动非常慢，SSH 连接等待时间过长。
 
 ### 当前瓶颈分析
 
@@ -270,7 +263,29 @@ let ssh_timeout = if kvm_available {
 
 考虑使用更快的文件传输方式（如并行传输、压缩）减少 Orion 上传时间。
 
-## 5. 调试建议
+## 6. 优雅关闭信号处理
+
+### 问题现象
+
+`qlean` 的 `Machine::shutdown()` 方法可能未正确处理 SIGTERM/SIGQUIT 信号。
+
+### 可能的修复方案
+
+在 `qlean` 中增强信号处理，支持多种优雅关闭信号：
+
+```rust
+impl Machine {
+    pub async fn shutdown(mut self) -> Result<()> {
+        // 发送 SIGTERM 而不是 SIGKILL
+        self.process.signal(::std::os::unix::signal::SignalKind::terminate())?;
+        // 等待进程退出
+        tokio::time::timeout(Duration::from_secs(30), self.process.wait()).await??;
+        Ok(())
+    }
+}
+```
+
+## 7. 调试建议
 
 如果需要进一步调试 qlean 的 KVM 检测问题，可以使用以下方法：
 
@@ -308,3 +323,159 @@ cat /proc/<pid>/status | grep -i cap
 aa-status
 cat /proc/self/attr/current
 ```
+
+## 8. qlean API 接口设计
+
+为支持 `orion-scheduler` 多 VM 调度场景，建议在 qlean crate 中暴露以下接口：
+
+### 8.1 状态查询接口
+
+```rust
+// qlean/src/lib.rs
+
+/// 查询 KVM 是否可用（每次重新检测，不使用缓存）
+pub fn is_kvm_available() -> bool {
+    Kvm::new().is_ok()
+}
+
+/// 查询当前 KVM 缓存状态（供调试使用）
+pub fn is_kvm_available_cached() -> Option<bool> {
+    KVM_AVAILABLE.get().copied()
+}
+```
+
+### 8.2 目录路径查询
+
+```rust
+// qlean/src/utils.rs
+
+impl QleanDirs {
+    /// 获取数据目录（支持 XDG_DATA_HOME）
+    pub fn get_data_dir() -> PathBuf {
+        std::env::var("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| {
+                dirs::data_dir()
+                    .unwrap_or_else(|| PathBuf::from("/tmp"))
+                    .join("qlean")
+            })
+    }
+
+    /// 获取镜像目录
+    pub fn get_images_dir() -> PathBuf {
+        Self::get_data_dir().join("images")
+    }
+
+    /// 获取 runs 目录（VM 运行状态）
+    pub fn get_runs_dir() -> PathBuf {
+        Self::get_data_dir().join("runs")
+    }
+}
+```
+
+### 8.3 可配置的 MachineConfig
+
+```rust
+// qlean/src/machine.rs
+
+pub struct MachineConfig {
+    /// SSH 连接超时（无 KVM 时默认 60s，而非硬编码 180s）
+    pub ssh_timeout: Duration,
+    /// 强制启用/禁用 KVM（覆盖自动检测）
+    pub kvm_enabled: Option<bool>,
+    /// VM 内存大小（MB）
+    pub memory_mb: u32,
+    /// vCPU 数量
+    pub cpus: u32,
+    /// Guest CID（None 表示动态分配）
+    pub guest_cid: Option<u32>,
+}
+
+impl Default for MachineConfig {
+    fn default() -> Self {
+        Self {
+            ssh_timeout: Duration::from_secs(60),
+            kvm_enabled: None,
+            memory_mb: 4096,
+            cpus: 2,
+            guest_cid: None,  // 动态分配
+        }
+    }
+}
+```
+
+### 8.4 动态 Guest CID 分配
+
+```rust
+// qlean/src/qemu.rs
+
+impl QemuManager {
+    /// 分配一个未使用的 guest CID
+    pub fn allocate_guest_cid() -> Result<u32> {
+        // 扫描现有进程，查找已使用的 CID
+        // 返回 3-65535 范围内的随机可用 CID
+    }
+}
+```
+
+### 8.5 环境变量配置支持
+
+```rust
+// 支持的配置环境变量
+const QLEAN_CONFIG_ENV_VARS: &[&str] = &[
+    "QLEAN_SSH_TIMEOUT",      // SSH 超时（秒）
+    "QLEAN_FORCE_KVM",        // 强制启用/禁用 KVM ("true"/"false")
+    "QLEAN_DATA_DIR",         // 数据目录覆盖
+    "QLEAN_GUEST_CID",        // 指定 Guest CID
+];
+
+impl MachineConfig {
+    /// 从环境变量加载配置
+    pub fn from_env() -> Self {
+        let mut config = Self::default();
+
+        if let Ok(timeout) = std::env::var("QLEAN_SSH_TIMEOUT") {
+            if let Ok secs) = timeout.parse() {
+                config.ssh_timeout = Duration::from_secs(secs);
+            }
+        }
+
+        if let Ok(force) = std::env::var("QLEAN_FORCE_KVM") {
+            config.kvm_enabled = Some(force == "true");
+        }
+
+        if let Ok(cid) = std::env::var("QLEAN_GUEST_CID") {
+            if let Ok(cid_num) = cid.parse() {
+                config.guest_cid = Some(cid_num);
+            }
+        }
+
+        config
+    }
+}
+```
+
+### 8.6 推荐的最小暴露 API
+
+| 函数/类型 | 文件 | 说明 |
+|-----------|------|------|
+| `is_kvm_available()` | `lib.rs` | 每次重新检测 KVM |
+| `QleanDirs::get_data_dir()` | `utils.rs` | 获取数据目录 |
+| `QleanDirs::get_images_dir()` | `utils.rs` | 获取镜像目录 |
+| `MachineConfig::from_env()` | `machine.rs` | 从环境变量加载配置 |
+| `MachineConfig { ssh_timeout, kvm_enabled, guest_cid }` | `machine.rs` | 可配置字段 |
+| `allocate_guest_cid()` | `qemu.rs` | 动态 CID 分配 |
+
+---
+
+## 修复建议汇总
+
+| 问题 | 优先级 | 建议修复方案 |
+|------|--------|--------------|
+| KVM OnceLock 缓存 | 高 | 移除全局缓存，每次 VM 检查 |
+| 目录权限 | 中 | 遵守 XDG_DATA_HOME，使用当前用户目录 |
+| Guest CID 冲突 | 低 | 启动时清理或动态 CID |
+| KVM 检测时序 | 中 | 在 VM 启动前懒加载检查 |
+| SSH 超时硬编码 | 高 | 支持配置化超时，或减少无 KVM 时的 180 秒超时 |
+| 优雅关闭信号处理 | 中 | 支持 SIGTERM/SIGQUIT，不只是 SIGINT |
+| **qlean API 暴露** | 高 | 暴露目录查询、KVM 状态、MachineConfig 等接口 |
