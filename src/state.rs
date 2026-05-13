@@ -8,6 +8,7 @@ use crate::keep_alive::KeepAliveMachine;
 #[derive(Debug, Clone)]
 pub struct VmInfo {
     pub id: String,
+    pub ip: Option<String>,
     pub created_at: std::time::Instant,
     /// Path to the Orion log file
     pub log_file: Option<String>,
@@ -65,10 +66,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_state_set_clear() {
-        let config = Arc::new(tokio::sync::RwLock::new(crate::config::Config {
-            targets: Default::default(),
-            log_dir: "/tmp".to_string(),
-        }));
+        let config = Arc::new(tokio::sync::RwLock::new(crate::config::Config::new(
+            "/tmp".to_string(),
+        )));
         let state = AppState::new(config);
         assert!(state.get_vm().await.is_none());
         assert!(state.get_machine().await.is_none());

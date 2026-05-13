@@ -69,6 +69,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/logs/orion/live", axum::routing::get(handlers::logs_live_handler))
         .route("/logs/orion/stream", axum::routing::get(handlers::logs_stream_handler))
         .route("/scorpio/status", axum::routing::get(handlers::scorpio_status_handler))
+        .route("/scorpio/config", axum::routing::get(handlers::scorpio_config_handler))
         .route("/shutdown", axum::routing::post(handlers::shutdown_handler))
         .layer(
             CorsLayer::new()
@@ -84,43 +85,53 @@ async fn main() -> anyhow::Result<()> {
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
 
-    // Spawn shutdown handler for SIGINT (Ctrl+C)
-    let shutdown_state = state.clone();
-    tokio::spawn(async move {
+    // Handle termination signals: stop VM and server
+    let term_shutdown_state = state.clone();
+    let term_shutdown_signal = async move {
+        if let Some(()) = tokio::signal::unix::signal(SignalKind::terminate())
+            .unwrap()
+            .recv()
+            .await
+        {
+            tracing::info!("[shutdown] Received SIGTERM");
+            shutdown_vm(&term_shutdown_state).await;
+        }
+    };
+
+    let quit_shutdown_state = state.clone();
+    let quit_shutdown_signal = async move {
+        if let Some(()) = tokio::signal::unix::signal(SignalKind::quit())
+            .unwrap()
+            .recv()
+            .await
+        {
+            tracing::info!("[shutdown] Received SIGQUIT");
+            shutdown_vm(&quit_shutdown_state).await;
+        }
+    };
+
+    // Handle Ctrl+C: stop VM and server
+    let ctrl_c_shutdown_state = state.clone();
+    let ctrl_c_signal = async move {
         match ctrl_c().await {
             Ok(()) => {
                 tracing::info!("[shutdown] Received SIGINT (Ctrl+C)");
-                shutdown_vm(&shutdown_state).await;
+                shutdown_vm(&ctrl_c_shutdown_state).await;
             }
             Err(e) => tracing::error!("[shutdown] Ctrl+C handler error: {}", e),
         }
-    });
+    };
 
-    // Spawn shutdown handler for SIGTERM (graceful termination)
-    let term_state = state.clone();
-    tokio::spawn(async move {
-        match tokio::signal::unix::signal(SignalKind::terminate()).unwrap().recv().await {
-            Some(()) => {
-                tracing::info!("[shutdown] Received SIGTERM");
-                shutdown_vm(&term_state).await;
+    tracing::info!("[startup] Server running. Use /shutdown to stop VM only");
+    axum::serve(listener, app)
+        .with_graceful_shutdown(async {
+            tokio::select! {
+                _ = ctrl_c_signal => {}
+                _ = term_shutdown_signal => {}
+                _ = quit_shutdown_signal => {}
             }
-            None => {}
-        }
-    });
-
-    // Spawn shutdown handler for SIGQUIT
-    let quit_state = state.clone();
-    tokio::spawn(async move {
-        match tokio::signal::unix::signal(SignalKind::quit()).unwrap().recv().await {
-            Some(()) => {
-                tracing::info!("[shutdown] Received SIGQUIT");
-                shutdown_vm(&quit_state).await;
-            }
-            None => {}
-        }
-    });
-
-    axum::serve(listener, app).await?;
+        })
+        .await?;
 
     tracing::info!("[shutdown] Server exiting");
     Ok(())

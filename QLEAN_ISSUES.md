@@ -2,6 +2,22 @@
 
 本文档记录了 `orion-scheduler` 开发过程中遇到的，需要修改 `qlean` crate 的问题。
 
+---
+
+## 修复建议汇总
+
+| 问题 | 优先级 | 建议修复方案 |
+|------|--------|--------------|
+| KVM OnceLock 缓存 | 高 | 移除全局缓存，每次 VM 检查 |
+| 目录权限 | 中 | 遵守 XDG_DATA_HOME，使用当前用户目录 |
+| Guest CID 冲突 | 低 | 启动时清理或动态 CID |
+| KVM 检测时序 | 中 | 在 VM 启动前懒加载检查 |
+| SSH 超时硬编码 | 高 | 支持配置化超时，或减少无 KVM 时的 180 秒超时 |
+| 优雅关闭信号处理 | 中 | 支持 SIGTERM/SIGQUIT，不只是 SIGINT |
+| **qlean API 暴露** | 高 | 暴露目录查询、KVM 状态、MachineConfig 等接口 |
+| **VM 删除后资源不回收** | 高 | 添加镜像清理 API 或在 orion-scheduler 中手动清理 |
+| **自定义镜像复制瓶颈** | 高 | 使用 overlay 机制避免复制，或添加镜像缓存 |
+
 ## 1. KVM 检测警告
 
 ### 问题现象
@@ -466,16 +482,190 @@ impl MachineConfig {
 | `MachineConfig { ssh_timeout, kvm_enabled, guest_cid }` | `machine.rs` | 可配置字段 |
 | `allocate_guest_cid()` | `qemu.rs` | 动态 CID 分配 |
 
----
+## 9. VM 删除后资源不回收
 
-## 修复建议汇总
+### 问题现象
 
-| 问题 | 优先级 | 建议修复方案 |
-|------|--------|--------------|
-| KVM OnceLock 缓存 | 高 | 移除全局缓存，每次 VM 检查 |
-| 目录权限 | 中 | 遵守 XDG_DATA_HOME，使用当前用户目录 |
-| Guest CID 冲突 | 低 | 启动时清理或动态 CID |
-| KVM 检测时序 | 中 | 在 VM 启动前懒加载检查 |
-| SSH 超时硬编码 | 高 | 支持配置化超时，或减少无 KVM 时的 180 秒超时 |
-| 优雅关闭信号处理 | 中 | 支持 SIGTERM/SIGQUIT，不只是 SIGINT |
-| **qlean API 暴露** | 高 | 暴露目录查询、KVM 状态、MachineConfig 等接口 |
+`~/.local/share/qlean/images/` 下的自定义镜像在 VM 删除后不会被清理，每次部署都会残留约 2.5GB 的 qcow2 镜像文件：
+
+```
+~/.local/share/qlean/images/
+├── custom-orion-vm-1778587647/   ← 2.5GB 残留
+├── custom-orion-vm-1778588170/   ← 2.5GB 残留
+├── custom-orion-vm-1778588655/   ← 2.5GB 残留
+├── debian-13-buck2/              ← 官方基础镜像（正常）
+└── debian-13-generic-amd64/      ← 官方基础镜像（正常）
+```
+
+同时 `~/.local/share/qlean/runs/` 下也有残留的目录和 overlay.img 文件。
+
+### 根因分析
+
+`Machine::shutdown()` 只做了两件事：
+
+1. **关闭 VM** - 通过 `systemctl poweroff` 关闭客户机系统
+2. **清理 runs 目录** - 如果 `config.clear = true`，只删除 `runs/{machine_id}/`
+
+```rust
+// machine.rs:887-891 (Drop impl)
+if self.config.clear {
+    let dirs = QleanDirs::new().expect("Failed to get QleanDirs in Drop");
+    let run_dir = dirs.runs.join(&self.id);
+    let _ = std::fs::remove_dir_all(run_dir);  // 只删 runs，不删 images
+}
+```
+
+但 `images/` 目录中的自定义镜像（通过 `create_custom_image()` 创建）**从未被清理**。在 `orion-scheduler` 的 `KeepAliveMachine::new()` 中：
+
+```rust
+// keep_alive.rs:81
+qlean::create_custom_image(&format!("custom-{}", vm_name), image_config).await?
+```
+
+这会在 `~/.local/share/qlean/images/custom-{vm_name}/` 下生成完整的 qcow2 镜像（约 2.5GB）。VM 关闭后，这个目录**永久保留**。
+
+### 资源泄漏情况
+
+| 目录 | 内容 | 清理方式 | 状态 |
+|------|------|----------|------|
+| `runs/{id}/` | overlay.img (COW) | `shutdown()` 时删除 | ✅ 正常 |
+| `images/{name}/` | 完整 qcow2 + kernel/initrd | **从不删除** | ❌ 残留 |
+
+### 可能的修复方案
+
+#### 方案 A：在 qlean 中添加镜像清理 API
+
+在 `qlean` 中暴露镜像删除接口：
+
+```rust
+// qlean/src/lib.rs
+/// Delete a custom image by name
+pub async fn delete_custom_image(name: &str) -> Result<()> {
+    let dirs = QleanDirs::new()?;
+    let image_dir = dirs.images.join(name);
+    if image_dir.exists() {
+        tokio::fs::remove_dir_all(&image_dir).await?;
+    }
+    Ok(())
+}
+```
+
+#### 方案 B：在 orion-scheduler 中手动清理
+
+在 `KeepAliveMachine::shutdown()` 后，根据 `vm_name` 推算镜像目录并删除：
+
+```rust
+// keep_alive.rs
+pub async fn shutdown_and_cleanup(self) -> Result<()> {
+    self.shutdown().await?;
+
+    // 清理对应的 images 目录
+    let dirs = QleanDirs::new()?;
+    let image_name = format!("custom-{}", self.vm_name);
+    let image_dir = dirs.images.join(&image_name);
+    let _ = tokio::fs::remove_dir_all(&image_dir).await?;
+    Ok(())
+}
+```
+
+#### 方案 C：区分基础镜像和临时镜像
+
+- 基础镜像（如 `debian-13-generic-amd64`、`debian-13-buck2`）应持久保留
+- 临时镜像（如 `custom-orion-vm-*`）在 VM 删除后应自动清理
+
+在配置中区分镜像类型：
+
+```rust
+pub struct CustomImageConfig {
+    pub image_source: ImageSource,
+    pub image_hash: String,
+    pub persistent: bool,  // 新增：是否持久化
+}
+```
+
+## 10. 自定义镜像复制瓶颈
+
+### 问题现象
+
+启动自定义镜像的 VM 时，从日志观察到以下时间线：
+
+```
+02:35:40 - 使用自定义镜像
+02:36:36 - 镜像 hash 计算完成 (~55s)
+02:41:21 - VM 初始化开始 (~4m45s 空档)
+02:41:21 - SSH 连接开始
+02:42:01 - SSH 连接成功 (~40s)
+```
+
+从 hash 计算完成到 VM 初始化开始之间有 **4m45s 空档**。
+
+### 根因分析
+
+`qlean::create_custom_image()` 中会复制镜像文件：
+
+```rust
+// image.rs:900-912 (Custom::download)
+ImageSource::LocalPath(src) => {
+    tokio::fs::copy(src, dest).await?;  // 复制整个 2.5GB 文件！
+}
+```
+
+每次创建 VM 时，qlean 会把源镜像复制到 `~/.local/share/qlean/images/custom-orion-vm-xxx/` 目录：
+
+```
+源: /home/ubuntu/.local/share/qlean/images/debian-13-buck2/debian-13-buck2.qcow2 (2.5GB)
+    ↓ copy
+目的: ~/.local/share/qlean/images/custom-orion-vm-xxx/custom-orion-vm-xxx.qcow2
+```
+
+这就是 4m45s 空档的原因！2.5GB 文件复制约需 4-5 分钟。
+
+### 完整耗时分解
+
+| 阶段 | 耗时 | 原因 |
+|------|------|------|
+| 镜像 hash 计算 | ~55s (优化后几秒) | 流式读取 2.5GB |
+| **文件复制** | **~4m45s** | **复制 2.5GB 到新目录** |
+| SSH 连接等待 | ~40s | VM boot + SSH 服务就绪 |
+
+### 可能的修复方案
+
+#### 方案 A：直接使用源镜像 + overlay（推荐）
+
+修改 `Custom::download` 的 `LocalPath` 逻辑，不复制文件，只创建指向源镜像的路径：
+
+```rust
+ImageSource::LocalPath(src) => {
+    // 不复制，直接使用源文件路径
+    // overlay 机制已经实现了 COW，不需要复制整个镜像
+}
+```
+
+但需要注意 `ImageMeta` 的设计假设文件在 `image_dir` 下，可能需要较大改动。
+
+#### 方案 B：镜像缓存 + 引用计数
+
+检测到源镜像未变化时，跳过复制：
+
+```rust
+if let ImageSource::LocalPath(src) = &self.config.image_source {
+    let src_hash = compute_sha256_streaming(src).await?;
+    let cache_key = format!("{:x}", src_hash);
+    // 检查缓存是否存在且有效
+    // 如果有效，直接使用缓存路径
+}
+```
+
+#### 方案 C：延迟复制
+
+只在确实需要修改镜像时才复制，初始只创建 overlay：
+
+```rust
+// Machine::new() 中已经创建了 overlay.img
+// overlay 引用源镜像，不需要完整复制
+```
+
+### 相关问题
+
+- 此问题与 "VM 删除后资源不回收" 关联：每次创建的镜像副本都残留磁盘空间
+- 使用 overlay 机制可以同时解决两个问题

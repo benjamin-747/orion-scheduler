@@ -8,21 +8,23 @@
 
 orion-scheduler 依赖 KVM 虚拟化，需在 AWS EC2 实例上启用嵌套虚拟化：
 
-| 条件 | 说明 |
-|------|------|
-| 实例类型 | 支持嵌套虚拟化的类型：`C8i`、`M8i`、`R8i` |
+| 条件    | 说明                                 |
+| ----- | ---------------------------------- |
+| 实例类型  | 支持嵌套虚拟化的类型：`C8i`、`M8i`、`R8i`       |
 | 嵌套虚拟化 | 需在实例上启用（新建实例时开启或对现有已停止实例修改 CPU 选项） |
-| 操作系统 | 本服务运行在 EC2 实例的 Linux 系统中 |
+| 操作系统  | 本服务运行在 EC2 实例的 Linux 系统中           |
 
 启用方式：
 
 **AWS 控制台**：
+
 1. 停止目标实例
 2. 选择实例 → Actions → Instance settings → Change CPU options
 3. 在 "Nested virtualization" 选择 "Enable"
 4. 保存后重新启动实例
 
 **AWS CLI**：
+
 ```bash
 # 新建实例时启用
 aws ec2 run-instances --cpu-options "NestedVirtualization=enabled" ...
@@ -36,6 +38,7 @@ aws ec2 start-instances --instance-id i-xxxxx
 **GCP 环境**：（待调查）
 
 **架构**：
+
 ```
 GitHub Actions  --webhook-->  orion-scheduler  --qlean-->  QEMU/KVM VM
                                               |
@@ -44,15 +47,15 @@ GitHub Actions  --webhook-->  orion-scheduler  --qlean-->  QEMU/KVM VM
 
 ## 2. 组件
 
-| 组件 | 描述 |
-|------|------|
-| `main.rs` | 使用 axum 的 HTTP 服务器入口，支持优雅关闭 |
-| `handlers.rs` | HTTP 请求处理器：/webhook, /health, /status, /logs/orion, /logs/orion/live, /logs/orion/stream, /scorpio/status, /shutdown |
-| `state.rs` | 用于跟踪 VM 生命周期的 AppState |
-| `vm_manager.rs` | VM 部署操作（上传文件、替换环境变量、启动服务） |
-| `orion_deployer.rs` | Orion 部署编排，协调 VM 操作 |
-| `config.rs` | 动态配置加载和管理，支持从 JSON 文件读取 target 环境配置 |
-| `keep_alive.rs` | Keep-alive VM 包装器，支持持久化 VM 连接 |
+| 组件                  | 描述                                                                                                                   |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `main.rs`           | 使用 axum 的 HTTP 服务器入口，支持优雅关闭                                                                                          |
+| `handlers.rs`       | HTTP 请求处理器：/webhook, /health, /status, /logs/orion, /logs/orion/live, /logs/orion/stream, /scorpio/status, /shutdown |
+| `state.rs`          | 用于跟踪 VM 生命周期的 AppState                                                                                               |
+| `vm_manager.rs`     | VM 部署操作（上传文件、替换环境变量、启动服务）                                                                                            |
+| `orion_deployer.rs` | Orion 部署编排，协调 VM 操作                                                                                                  |
+| `config.rs`         | 动态配置加载和管理，支持从 JSON 文件读取 target 环境配置                                                                                  |
+| `keep_alive.rs`     | Keep-alive VM 包装器，支持持久化 VM 连接                                                                                        |
 
 ## 3. API 端点
 
@@ -61,6 +64,7 @@ GitHub Actions  --webhook-->  orion-scheduler  --qlean-->  QEMU/KVM VM
 健康检查端点。
 
 **响应**：
+
 ```json
 {"status": "healthy", "service": "orion-scheduler"}
 ```
@@ -70,13 +74,15 @@ GitHub Actions  --webhook-->  orion-scheduler  --qlean-->  QEMU/KVM VM
 获取当前 VM 状态。
 
 **响应**（VM 运行中）：
+
 ```json
-{"status": "running", "vm_id": "orion-vm-1234567890", "uptime_secs": 60, "log_file": "/var/log/orion-scheduler/orion-vm-1234567890-1746766200.log"}
+{"status": "running", "vm_id": "orion-vm-1234567890", "vm_ip": "192.168.221.87", "uptime_secs": 60, "log_file": "/var/log/orion-scheduler/orion-vm-1234567890-1746766200.log"}
 ```
 
 **响应**（无 VM）：
+
 ```json
-{"status": "no_vm", "vm_id": null}
+{"status": "no_vm", "vm_id": null, "vm_ip": null}
 ```
 
 ### GET /logs/orion
@@ -97,6 +103,7 @@ GitHub Actions  --webhook-->  orion-scheduler  --qlean-->  QEMU/KVM VM
 ```
 
 **响应**（无 VM）：返回 JSON
+
 ```json
 {"status": "no_vm", "error": "No VM is currently running"}
 ```
@@ -106,6 +113,7 @@ GitHub Actions  --webhook-->  orion-scheduler  --qlean-->  QEMU/KVM VM
 获取 VM 中 Orion 的实时日志（journalctl + orion.log），返回 JSON 格式。
 
 **响应**（成功）：
+
 ```json
 {
   "status": "ok",
@@ -114,6 +122,7 @@ GitHub Actions  --webhook-->  orion-scheduler  --qlean-->  QEMU/KVM VM
 ```
 
 **响应**（无 VM）：
+
 ```json
 {"status": "error", "error": "No VM is currently running"}
 ```
@@ -123,6 +132,7 @@ GitHub Actions  --webhook-->  orion-scheduler  --qlean-->  QEMU/KVM VM
 SSE 流式端点，每 2 秒推送一次格式化日志。
 
 **使用方式**：
+
 ```bash
 # 实时查看日志（终端持续刷新）
 curl -N http://localhost:8080/logs/orion/stream
@@ -135,11 +145,13 @@ curl -N http://localhost:8080/logs/orion/stream
 优雅关闭 VM 并退出服务。
 
 **使用方式**：
+
 ```bash
 curl -X POST http://localhost:8080/shutdown
 ```
 
 **响应**：
+
 ```json
 {"status": "ok", "message": "Shutdown initiated, VM will be stopped"}
 ```
@@ -149,6 +161,7 @@ curl -X POST http://localhost:8080/shutdown
 获取 VM 中 Orion 的实时日志（journalctl + orion.log），返回 JSON 格式。
 
 **响应**（成功）：
+
 ```json
 {
   "status": "ok",
@@ -157,6 +170,7 @@ curl -X POST http://localhost:8080/shutdown
 ```
 
 **响应**（无 VM）：
+
 ```json
 {"status": "error", "error": "No VM is currently running"}
 ```
@@ -166,6 +180,7 @@ curl -X POST http://localhost:8080/shutdown
 Webhook 端点健康检查。
 
 **响应**：
+
 ```json
 {"status": "ok", "vm_id": null, "error": null, "orion_log_file": null}
 ```
@@ -175,6 +190,7 @@ Webhook 端点健康检查。
 接收来自 GitHub Actions 的更新请求。
 
 **请求体**（GitHub Actions 格式）：
+
 ```json
 {
   "action": "requested",
@@ -183,13 +199,14 @@ Webhook 端点健康检查。
 }
 ```
 
-| 字段 | 类型 | 描述 |
-|------|------|------|
-| `action` | string | GitHub Actions 事件类型 |
-| `workflow` | string | 工作流名称 |
-| `target` | string | 目标环境：`aws-gitmega`、`aws-gitmono`、`gcp-buck2hub`（必填） |
+| 字段         | 类型     | 描述                                                  |
+| ---------- | ------ | --------------------------------------------------- |
+| `action`   | string | GitHub Actions 事件类型                                 |
+| `workflow` | string | 工作流名称                                               |
+| `target`   | string | 目标环境：`aws-gitmega`、`aws-gitmono`、`gcp-buck2hub`（必填） |
 
 **响应**：
+
 ```json
 {
   "status": "ok",
@@ -250,25 +267,25 @@ pub struct AppState {
 
 ### 4.3 详细步骤
 
-| 阶段 | 步骤 | 操作 | 说明 |
-|------|------|------|------|
-| **接收请求** | 1 | 接收 webhook | 解析 `target` 参数（必填），从配置获取对应的 `TargetConfig` |
-| **清理** | 2 | 清理旧 VM | 优雅关闭已有 VM（调用 `machine.shutdown()`） |
-| **创建** | 3 | 创建 VM | 使用 `KeepAliveMachine::new()` 创建新 VM |
-| **部署** | 4 | 创建目录 | 在 VM 内创建 `/home/orion/orion-runner/` 目录 |
-| | 5 | 上传配置文件 | 通过 SFTP 上传 `run.sh`、`scorpio.toml`、`preflight.sh`、`cleanup.sh` |
-| | 6 | 上传 .env 文件 | 上传 `.env.prod` 重命名为 `.env` |
-| | 7 | 上传 systemd 服务 | 上传 `orion-runner.service` 到 `/etc/systemd/system/` |
-| | 8 | 上传 Orion 二进制 | 通过 SFTP 上传 orion 二进制文件（~500MB） |
-| | 9 | 设置权限 | `chmod +x` 对脚本和二进制，设置 `setcap cap_dac_read_search+ep` |
-| | 10 | 重载 systemd | 执行 `systemctl daemon-reload` |
-| **配置** | 11 | 替换环境变量 | 使用 `sed` 替换 `.env` 中的 `SERVER_WS` 和 `scorpio.toml` 中的 `base_url`、`lfs_url` |
-| **启动** | 12 | 创建 Scorpio 目录 | 创建 `/data/scorpio/store`、`/data/scorpio/antares/{upper,cl,mnt}`、`/workspace/mount` |
-| | 13 | 设置目录所有权 | `chown -R orion:orion /data/scorpio` 和 `/workspace/mount` |
-| | 14 | 启动服务 | `systemctl start orion-runner` |
-| | 15 | 验证状态 | 检查 `systemctl is-active orion-runner` 和进程状态 |
-| **完成** | 16 | 保存日志 | 将初始日志写入 `log_dir` 目录 |
-| | 17 | 保持运行 | VM 保持运行，`orion_log_file` 返回日志文件路径 |
+| 阶段       | 步骤  | 操作            | 说明                                                                                 |
+| -------- | --- | ------------- | ---------------------------------------------------------------------------------- |
+| **接收请求** | 1   | 接收 webhook    | 解析 `target` 参数（必填），从配置获取对应的 `TargetConfig`                                         |
+| **清理**   | 2   | 清理旧 VM        | 优雅关闭已有 VM（调用 `machine.shutdown()`）                                                 |
+| **创建**   | 3   | 创建 VM         | 使用 `KeepAliveMachine::new()` 创建新 VM                                                |
+| **部署**   | 4   | 创建目录          | 在 VM 内创建 `/home/orion/orion-runner/` 目录                                            |
+|          | 5   | 上传配置文件        | 通过 SFTP 上传 `run.sh`、`scorpio.toml`、`preflight.sh`、`cleanup.sh`                     |
+|          | 6   | 上传 .env 文件    | 上传 `.env.prod` 重命名为 `.env`                                                         |
+|          | 7   | 上传 systemd 服务 | 上传 `orion-runner.service` 到 `/etc/systemd/system/`                                 |
+|          | 8   | 上传 Orion 二进制  | 通过 SFTP 上传 orion 二进制文件（~500MB）                                                     |
+|          | 9   | 设置权限          | `chmod +x` 对脚本和二进制，设置 `setcap cap_dac_read_search+ep`                              |
+|          | 10  | 重载 systemd    | 执行 `systemctl daemon-reload`                                                       |
+| **配置**   | 11  | 替换环境变量        | 使用 `sed` 替换 `.env` 中的 `SERVER_WS` 和 `scorpio.toml` 中的 `base_url`、`lfs_url`         |
+| **启动**   | 12  | 创建 Scorpio 目录 | 创建 `/data/scorpio/store`、`/data/scorpio/antares/{upper,cl,mnt}`、`/workspace/mount` |
+|          | 13  | 设置目录所有权       | `chown -R orion:orion /data/scorpio` 和 `/workspace/mount`                          |
+|          | 14  | 启动服务          | `systemctl start orion-runner`                                                     |
+|          | 15  | 验证状态          | 检查 `systemctl is-active orion-runner` 和进程状态                                        |
+| **完成**   | 16  | 保存日志          | 将初始日志写入 `log_dir` 目录                                                               |
+|          | 17  | 保持运行          | VM 保持运行，`orion_log_file` 返回日志文件路径                                                  |
 
 ## 5. 功能
 
@@ -287,6 +304,13 @@ orion-scheduler 将环境配置外部化为 JSON 配置文件，无需修改代�
 ```json
 {
   "log_dir": "/var/log/orion-scheduler",
+  "default_image": "buck2",
+  "custom_images": {
+    "buck2": {
+      "path": "/home/ubuntu/.local/share/qlean/images/debian-13-buck2/debian-13-buck2.qcow2",
+      "description": "Debian 13 with pre-installed buck2"
+    }
+  },
   "targets": {
     "aws-gitmega": {
       "server_ws": "wss://orion.gitmega.com/ws",
@@ -307,12 +331,27 @@ orion-scheduler 将环境配置外部化为 JSON 配置文件，无需修改代�
 }
 ```
 
+**配置说明**：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `log_dir` | string | Orion 日志目录 |
+| `default_image` | string? | 全局默认自定义镜像名称（可选，引用 `custom_images`） |
+| `custom_images` | object? | 自定义镜像映射表，键为镜像名称，值为镜像配置 |
+| `custom_images[].path` | string | 镜像文件路径（qcow2） |
+| `custom_images[].description` | string? | 镜像描述 |
+| `custom_images[].disk_gb` | u32? | VM 磁盘大小（GB），默认使用镜像大小 |
+| `targets` | object | 部署目标配置 |
+| `targets[].server_ws` | string | Orion WebSocket 服务器 URL |
+| `targets[].scorpio_base_url` | string | Scorpio 基础 URL（替换 scorpio.toml 中的 base_url） |
+| `targets[].scorpio_lfs_url` | string | Scorpio LFS URL（替换 scorpio.toml 中的 lfs_url） |
+
 #### target 对应表
 
-| target | SERVER_WS | scorpio.toml base_url | scorpio.toml lfs_url |
-|--------|-----------|------------------------|----------------------|
-| `aws-gitmega` | `wss://orion.gitmega.com/ws` | `https://git.gitmega.com` | `https://git.gitmega.com` |
-| `aws-gitmono` | `wss://orion.gitmono.com/ws` | `https://git.gitmono.com` | `https://git.gitmono.com` |
+| target         | SERVER_WS                     | scorpio.toml base_url      | scorpio.toml lfs_url       |
+| -------------- | ----------------------------- | -------------------------- | -------------------------- |
+| `aws-gitmega`  | `wss://orion.gitmega.com/ws`  | `https://git.gitmega.com`  | `https://git.gitmega.com`  |
+| `aws-gitmono`  | `wss://orion.gitmono.com/ws`  | `https://git.gitmono.com`  | `https://git.gitmono.com`  |
 | `gcp-buck2hub` | `wss://orion.buck2hub.com/ws` | `https://git.buck2hub.com` | `https://git.buck2hub.com` |
 
 #### 扩展新的 target
@@ -320,6 +359,7 @@ orion-scheduler 将环境配置外部化为 JSON 配置文件，无需修改代�
 要添加新的 target，只需在 `target_config.json` 的 `targets` 对象中添加一个新条目：
 
 1. 编辑 `target_config.json`：
+
 ```json
 {
   "targets": {
@@ -335,9 +375,9 @@ orion-scheduler 将环境配置外部化为 JSON 配置文件，无需修改代�
 }
 ```
 
-2. 重启 orion-scheduler 服务使配置生效
+1. 重启 orion-scheduler 服务使配置生效
+2. 在 webhook 请求中指定新的 target：
 
-3. 在 webhook 请求中指定新的 target：
 ```json
 {
   "action": "requested",
@@ -347,6 +387,80 @@ orion-scheduler 将环境配置外部化为 JSON 配置文件，无需修改代�
 ```
 
 **注意**：如果请求的 target 不存在于配置中，服务会返回错误并列出所有可用的 target。
+
+#### 自定义镜像
+
+orion-scheduler 支持使用预装 buck2 的自定义镜像，可以显著加快部署速度（跳过运行时安装）。
+
+**1. 构建自定义镜像**
+
+```bash
+# 运行镜像构建脚本（需要 root 权限和 KVM）
+sudo /home/ubuntu/orion-scheduler/scripts/build-custom-image.sh
+```
+
+构建过程：
+1. 复制基础镜像 `debian-13-generic-amd64.qcow2`
+2. 启动临时 VM，使用 cloud-init 在首次启动时安装 buck2
+3. 关闭 VM，捕获修改后的镜像
+4. 提取 kernel 和 initrd 文件
+
+构建产物：
+```
+~/.local/share/qlean/images/debian-13-buck2/
+├── debian-13-buck2.qcow2   # 自定义镜像（含 buck2）
+├── vmlinuz-6.12.85+deb13-amd64
+├── initrd.img-6.12.85+deb13-amd64
+└── checksums
+```
+
+**2. 添加自定义镜像到配置**
+
+编辑 `target_config.json`，在 `custom_images` 中添加新镜像：
+
+```json
+{
+  "custom_images": {
+    "buck2": {
+      "path": "/home/ubuntu/.local/share/qlean/images/debian-13-buck2/debian-13-buck2.qcow2",
+      "description": "Debian 13 with pre-installed buck2",
+      "disk_gb": 100
+    },
+    "new-image": {
+      "path": "/path/to/new-image.qcow2",
+      "description": "Custom description",
+      "disk_gb": 50
+    }
+  }
+}
+```
+
+**3. 设置全局默认镜像**
+
+在 `default_image` 中指定默认使用的镜像：
+
+```json
+{
+  "default_image": "buck2",
+  ...
+}
+```
+
+所有 targets 将默认使用该镜像。如需对特定 target 使用不同镜像，可以在 target 中单独指定（暂不支持）。
+
+**4. 自定义镜像是前提条件**
+
+使用 orion-scheduler 部署前，必须先准备好自定义镜像。如果 `default_image` 未配置或镜像不存在，部署时会报错：
+
+```
+default_image is not configured. Please either:
+1. Set default_image in target_config.json to a custom image name, or
+2. Build the buck2 image: sudo /home/ubuntu/orion-scheduler/scripts/build-custom-image.sh
+```
+
+**原因**：运行时安装 buck2 耗时约 30 秒，且依赖网络下载。自定义镜像预装 buck2 可将部署时间缩短至约 10 秒。
+
+如需使用默认镜像 + 运行时安装，需修改代码逻辑。
 
 #### 实现方式
 
@@ -392,14 +506,14 @@ pub async fn replace_env_vars(
 
 Orion 启动时，将以下信息输出到服务端日志：
 
-| 阶段 | 日志内容 |
-|------|----------|
-| 目录创建 | `Creating directory: /data/scorpio/store` |
-| 文件上传 | `Uploading file: orion (~500MB)` |
-| 权限设置 | `Setting permissions on /home/orion/orion-runner/orion` |
-| 服务启动 | `Starting Orion service: systemctl start orion-runner` |
+| 阶段   | 日志内容                                                                   |
+| ---- | ---------------------------------------------------------------------- |
+| 目录创建 | `Creating directory: /data/scorpio/store`                              |
+| 文件上传 | `Uploading file: orion (~500MB)`                                       |
+| 权限设置 | `Setting permissions on /home/orion/orion-runner/orion`                |
+| 服务启动 | `Starting Orion service: systemctl start orion-runner`                 |
 | 启动结果 | `Orion service started successfully` 或 `Orion service failed: <error>` |
-| 健康检查 | `Orion health check: systemctl is-active orion-runner` |
+| 健康检查 | `Orion health check: systemctl is-active orion-runner`                 |
 
 日志格式：
 
@@ -414,15 +528,15 @@ tracing::error!("[orion-deploy] Orion start failed: {}", error);
 
 ## 6. 配置文件
 
-| 来源 | 目标 | 作用描述 |
-|------|------|----------|
-| `scorpio.toml` | `/home/orion/orion-runner/scorpio.toml` | Scorpio FUSE 文件系统配置，定义 Mega 服务地址、store_path、workspace 挂载点、Dicfuse 和 Antares overlay 的行为参数 |
-| `.env.prod` | `/home/orion/orion-runner/.env` | Orion 运行时的环境变量，包括 `SERVER_WS`（WebSocket 服务器地址）、`BUCK_PROJECT_ROOT`（Buck 项目路径）等 |
-| `run.sh` | `/home/orion/orion-runner/run.sh` | Orion 启动脚本，加载 `.env` 环境变量，执行 `preflight.sh` 前置检查，然后启动 orion 进程 |
-| `preflight.sh` | `/home/orion/orion-runner/preflight.sh` | 前置检查脚本，验证 FUSE 能力和设备访问权限，确保环境满足 Orion 运行要求 |
-| `cleanup.sh` | `/home/orion/orion-runner/cleanup.sh` | 清理脚本，在 Orion 启动前杀死旧进程并卸载 FUSE 文件系统 |
-| `orion-runner.service` | `/etc/systemd/system/orion-runner.service` | systemd 服务单元定义，负责配置 Orion 服务的启动参数、运行环境、权限和能力、停止超时等 |
-| `orion` | `/home/orion/orion-runner/orion` | Orion 主程序二进制文件，Buck 构建任务的 WebSocket 客户端，接收并执行构建任务 |
+| 来源                     | 目标                                         | 作用描述                                                                                      |
+| ---------------------- | ------------------------------------------ | ----------------------------------------------------------------------------------------- |
+| `scorpio.toml`         | `/home/orion/orion-runner/scorpio.toml`    | Scorpio FUSE 文件系统配置，定义 Mega 服务地址、store_path、workspace 挂载点、Dicfuse 和 Antares overlay 的行为参数 |
+| `.env.prod`            | `/home/orion/orion-runner/.env`            | Orion 运行时的环境变量，包括 `SERVER_WS`（WebSocket 服务器地址）、`BUCK_PROJECT_ROOT`（Buck 项目路径）等            |
+| `run.sh`               | `/home/orion/orion-runner/run.sh`          | Orion 启动脚本，加载 `.env` 环境变量，执行 `preflight.sh` 前置检查，然后启动 orion 进程                            |
+| `preflight.sh`         | `/home/orion/orion-runner/preflight.sh`    | 前置检查脚本，验证 FUSE 能力和设备访问权限，确保环境满足 Orion 运行要求                                                |
+| `cleanup.sh`           | `/home/orion/orion-runner/cleanup.sh`      | 清理脚本，在 Orion 启动前杀死旧进程并卸载 FUSE 文件系统                                                        |
+| `orion-runner.service` | `/etc/systemd/system/orion-runner.service` | systemd 服务单元定义，负责配置 Orion 服务的启动参数、运行环境、权限和能力、停止超时等                                        |
+| `orion`                | `/home/orion/orion-runner/orion`           | Orion 主程序二进制文件，Buck 构建任务的 WebSocket 客户端，接收并执行构建任务                                         |
 
 ## 7. 部署与运行
 
@@ -460,12 +574,12 @@ async fn graceful_shutdown(app_state: Arc<AppState>) {
 
 #### 异常情况处理
 
-| 场景 | 处理方式 |
-|------|----------|
+| 场景      | 处理方式                       |
+| ------- | -------------------------- |
 | VM 关闭超时 | 强制 kill QEMU 进程（`kill -9`） |
-| QEMU 僵死 | 使用 `fuser -k` 释放端口 |
-| 残留进程 | 启动时检查并清理孤儿进程 |
-| 文件锁 | 清理 `/var/lock/qemu/` 下的锁文件 |
+| QEMU 僵死 | 使用 `fuser -k` 释放端口         |
+| 残留进程    | 启动时检查并清理孤儿进程               |
+| 文件锁     | 清理 `/var/lock/qemu/` 下的锁文件 |
 
 #### 启动时检查
 
@@ -547,7 +661,7 @@ curl -X POST http://localhost:8080/webhook \
 
 # 获取 VM 状态（keep-alive 模式，VM 持续运行）
 curl http://localhost:8080/status
-# 响应: {"status": "running", "vm_id": "orion-vm-xxx", "uptime_secs": 60, "log_file": "/var/log/orion-scheduler/..."}
+# 响应: {"status": "running", "vm_id": "orion-vm-xxx", "vm_ip": "192.168.221.87", "uptime_secs": 60, "log_file": "/var/log/orion-scheduler/..."}
 
 # 获取格式化日志（HTML，带颜色框线）
 curl http://localhost:8080/logs/orion
@@ -567,16 +681,17 @@ curl http://localhost:8080/scorpio/status
 
 # 优雅关闭（停止 VM 并退出）
 curl -X POST http://localhost:8080/shutdown
+
 # 响应: {"status": "ok", "message": "Shutdown initiated, VM will be stopped"}
 ```
 
 ### 8.3 日志端点对比
 
-| 端点 | 响应格式 | 特点 | 使用场景 |
-|------|----------|------|----------|
-| `GET /logs/orion` | HTML | 带颜色、emoji、框线 | `curl` 直接查看，终端可视化 |
-| `GET /logs/orion/live` | JSON | 实时查询 | 程序调用，获取日志文本 |
-| `GET /logs/orion/stream` | SSE | 每 2 秒推送 | `curl -N` 持续监控 |
+| 端点                       | 响应格式 | 特点           | 使用场景              |
+| ------------------------ | ---- | ------------ | ----------------- |
+| `GET /logs/orion`        | HTML | 带颜色、emoji、框线 | `curl` 直接查看，终端可视化 |
+| `GET /logs/orion/live`   | JSON | 实时查询         | 程序调用，获取日志文本       |
+| `GET /logs/orion/stream` | SSE  | 每 2 秒推送      | `curl -N` 持续监控    |
 
 ### 8.4 服务管理
 
@@ -616,20 +731,29 @@ ps aux | grep orion-scheduler | grep -v grep
 ps aux | grep qemu | grep -v grep
 ```
 
-#### 优雅关闭服务（推荐方式）
+#### 优雅关闭服务
+
+| 操作 | VM | 服务器 | 说明 |
+|------|-----|--------|------|
+| `Ctrl+C` | 停止 | 停止 | 关闭 VM 后退出服务 |
+| SIGTERM | 停止 | 停止 | 关闭 VM 后退出服务 |
+| SIGQUIT | 停止 | 停止 | 关闭 VM 后退出服务 |
+| `POST /shutdown` | 停止 | 继续运行 | 仅关闭 VM，服务保持运行 |
+| `pkill -9 -f orion-scheduler` | - | 停止 | **不优雅**：直接杀死进程，不会关闭 VM |
 
 ```bash
-# 方法一：使用 HTTP POST 请求关闭（会先停止 VM 再退出）
+# 关闭 VM，服务继续运行（推荐）
 curl -X POST http://localhost:8080/shutdown
 
-# 方法二：发送 SIGTERM 信号
+# 发送 SIGTERM 信号（关闭 VM 并停止服务）
 kill -TERM <pid>
 
-# 方法三：使用 systemctl (如果是 systemd 服务)
-systemctl stop orion-scheduler
-```
+# Ctrl+C 关闭 VM 并停止服务
+# (在运行服务的终端中按 Ctrl+C)
 
-**注意**：`pkill -9 -f orion-scheduler` 会直接杀死进程，不会优雅关闭 VM！
+# 强制杀死进程（不优雅）
+pkill -9 -f orion-scheduler
+```
 
 ### 8.5 查看日志
 
@@ -649,14 +773,15 @@ journalctl -u orion-scheduler -f
 
 ### 8.6 常见问题排查
 
-| 问题 | 排查方法 |
-|------|----------|
-| KVM 权限错误 | 检查 `/dev/kvm` 权限，确保用户在 `kvm` 组 |
-| QEMU 网络桥接失败 | 检查 `/etc/qemu/bridge.conf` 是否配置 `allow qlbr0` |
-| VM 启动超时 | 检查 cloud-init 是否正常，SSH 是否可连接 |
-| Orion 启动失败 | `curl http://localhost:8080/logs/orion` 查看格式化日志 |
-| Scorpio 挂载问题 | `curl http://localhost:8080/scorpio/status` 检查挂载状态 |
-| VM 已关闭但状态显示 running | 重启服务或检查 VM 是否异常退出 |
+| 问题                  | 排查方法                                               |
+| ------------------- | -------------------------------------------------- |
+| KVM 权限错误            | 检查 `/dev/kvm` 权限，确保用户在 `kvm` 组                     |
+| QEMU 网络桥接失败         | 检查 `/etc/qemu/bridge.conf` 是否配置 `allow qlbr0`      |
+| VM 启动超时             | 检查 cloud-init 是否正常，SSH 是否可连接                       |
+| Orion 启动失败          | `curl http://localhost:8080/logs/orion` 查看格式化日志    |
+| Scorpio 挂载问题        | `curl http://localhost:8080/scorpio/status` 检查挂载状态 |
+| VM 已关闭但状态显示 running | 重启服务或检查 VM 是否异常退出                                  |
+| 需要 SSH 进入 VM 调试     | Orion-scheduler 会自动注入 `/home/ubuntu/.ssh/orion_vm_access.pub` 对应的私钥访问权限。使用 `ssh -i /home/ubuntu/.ssh/orion_vm_access root@<vm-ip>` 连接      |
 
 ## 9. 限制和未来工作
 
@@ -665,3 +790,4 @@ journalctl -u orion-scheduler -f
 - **错误处理**：需要更健壮的错误恢复
 - **并发请求**：不支持 - 一次只能有一个 VM
 - **日志持久化**：初始日志持久化到文件，实时日志从 journalctl 读取
+- **Orion 二进制分发**：目前从本地目录 `/home/ubuntu/mega/target/debug/orion` 获取，未来改为通过 GitHub Actions 上传到 GitHub Releases，VM 直接从 Releases 下载，支持多架构和多版本管理

@@ -1,5 +1,13 @@
 {
   "log_dir": "/var/log/orion-scheduler",
+  "default_image": "buck2",
+  "custom_images": {
+    "buck2": {
+      "path": "/home/ubuntu/.local/share/qlean/images/debian-13-buck2/debian-13-buck2.qcow2",
+      "description": "Debian 13 with pre-installed buck2",
+      "disk_gb": 20
+    }
+  },
   "targets": {
     "aws-gitmega": {
       "server_ws": "wss://orion.gitmega.com/ws",

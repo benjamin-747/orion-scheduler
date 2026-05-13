@@ -41,24 +41,59 @@ pub async fn handle_update(state: &AppState, target: &str) -> Result<String> {
     let vm_name = format!("orion-vm-{}", chrono_lite_timestamp());
     info!("Creating new VM in keep_alive mode: {}", vm_name);
 
-    let machine = KeepAliveMachine::new(&vm_name).await?;
+    // Look up custom image path and disk size from global default_image config
+    let (custom_image_path, disk_gb) = {
+        let config = state.config.read().await;
+        if let Some(ref image_name) = config.default_image() {
+            match config.get_image_path(image_name) {
+                Some(path) => {
+                    info!("[orion-deploy] Using global default custom image '{}'", image_name);
+                    let disk_gb = config.get_image_disk(image_name);
+                    (Some(path), disk_gb)
+                }
+                None => {
+                    return Err(anyhow::anyhow!(
+                        "Custom image '{}' specified in default_image is not found in custom_images config. \
+                         Please build the buck2 image first: sudo /home/ubuntu/orion-scheduler/scripts/build-custom-image.sh",
+                        image_name
+                    ));
+                }
+            }
+        } else {
+            return Err(anyhow::anyhow!(
+                "default_image is not configured. Please either:\n\
+                 1. Set default_image in target_config.json to a custom image name, or\n\
+                 2. Build the buck2 image: sudo /home/ubuntu/orion-scheduler/scripts/build-custom-image.sh"
+            ));
+        }
+    };
 
-    // Step 4: Deploy Orion files
+    let machine = KeepAliveMachine::new(&vm_name, custom_image_path.clone(), disk_gb).await?;
+
+    // Step 4: Inject SSH keys for debugging
+    vm_manager::inject_ssh_keys(&machine).await?;
+
+    // Step 5: Deploy Orion files (Buck2 is pre-installed in custom image)
     info!("[orion-deploy] Starting Orion deployment");
     vm_manager::deploy_orion_in_vm(&machine).await?;
 
-    // Step 5: Replace environment variables based on target config
+    // Step 7: Replace environment variables based on target config
     vm_manager::replace_env_vars_in_vm(&machine, &target_config, target).await?;
 
-    // Step 6: Start Orion and capture initial logs
+    // Step 8: Start Orion and capture initial logs
     let logs = vm_manager::start_orion_in_vm(&machine).await?;
 
     // Save logs to file
     let log_file = save_orion_logs(&log_dir, &vm_name, &logs).await?;
 
+    // Step 9: Get VM IP address
+    let vm_ip = machine.get_ip().await.ok().flatten();
+    info!("[orion-deploy] VM IP: {:?}", vm_ip);
+
     // Set state with VM info and keep-alive machine
     let vm_info = VmInfo {
         id: vm_name.clone(),
+        ip: vm_ip,
         created_at: std::time::Instant::now(),
         log_file: Some(log_file.clone()),
     };

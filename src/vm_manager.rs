@@ -140,6 +140,37 @@ pub async fn start_orion_in_vm(machine: &KeepAliveMachine) -> Result<String> {
     Ok(logs)
 }
 
+/// Inject additional SSH public keys into the VM for debugging access
+pub async fn inject_ssh_keys(machine: &KeepAliveMachine) -> Result<()> {
+    info!("[ssh] Injecting SSH keys for debugging access");
+
+    // Read the extra public key from a file
+    let extra_key_path = std::path::Path::new("/home/ubuntu/.ssh/orion_vm_access.pub");
+    let extra_key = if extra_key_path.exists() {
+        tokio::fs::read_to_string(extra_key_path).await?.trim().to_string()
+    } else {
+        info!("[ssh] No extra SSH key found at {:?}, skipping", extra_key_path);
+        return Ok(());
+    };
+
+    // Ensure /root/.ssh directory exists
+    machine.exec("mkdir -p /root/.ssh && chmod 700 /root/.ssh").await?;
+
+    // Append the extra key to authorized_keys (avoiding duplicates)
+    let add_key_cmd = format!(
+        r#"grep -qF '{}' /root/.ssh/authorized_keys || echo '{}' >> /root/.ssh/authorized_keys"#,
+        extra_key, extra_key
+    );
+    machine.exec(&add_key_cmd).await?;
+
+    // Set correct permissions
+    machine.exec("chmod 600 /root/.ssh/authorized_keys").await?;
+
+    info!("[ssh] SSH key injection completed");
+    Ok(())
+}
+
+
 /// Replace environment variables based on target configuration
 pub async fn replace_env_vars_in_vm(machine: &KeepAliveMachine, target_config: &TargetConfig, target_name: &str) -> Result<()> {
     let server_ws = &target_config.server_ws;

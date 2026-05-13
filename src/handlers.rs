@@ -102,6 +102,7 @@ pub async fn status_handler(
         Some(vm) => Json(serde_json::json!({
             "status": "running",
             "vm_id": vm.id,
+            "vm_ip": vm.ip,
             "uptime_secs": vm.created_at.elapsed().as_secs(),
             "log_file": vm.log_file
         })),
@@ -235,7 +236,7 @@ fn strip_ansi(text: &str) -> String {
         if chars[i] == '\x1b' && i + 1 < chars.len() && chars[i + 1] == '[' {
             // Skip until end of ANSI sequence
             i += 2;
-            while i < chars.len() && !matches!(chars[i], 'A'..='Z' | 'a'..='z') {
+            while i < chars.len() && !chars[i].is_ascii_alphabetic() {
                 i += 1;
             }
             i += 1; // Skip the final letter
@@ -287,7 +288,39 @@ pub async fn scorpio_status_handler(
     }
 }
 
-/// POST /shutdown - Gracefully shutdown VM and exit
+/// GET /scorpio/config - Read scorpio.toml content from VM
+pub async fn scorpio_config_handler(
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let machine = match state.get_machine().await {
+        Some(m) => m,
+        None => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
+                "status": "error",
+                "error": "No VM is currently running"
+            }))).into_response()
+        }
+    };
+
+    match machine.exec("cat /home/orion/orion-runner/scorpio.toml").await {
+        Ok(output) => {
+            let content = String::from_utf8_lossy(&output.stdout).to_string();
+            (StatusCode::OK, Json(serde_json::json!({
+                "status": "ok",
+                "path": "/home/orion/orion-runner/scorpio.toml",
+                "content": content
+            }))).into_response()
+        }
+        Err(e) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
+                "status": "error",
+                "error": e.to_string()
+            }))).into_response()
+        }
+    }
+}
+
+/// POST /shutdown - Shutdown VM only, server keeps running
 pub async fn shutdown_handler(
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
@@ -305,16 +338,9 @@ pub async fn shutdown_handler(
     }
     state.clear_vm().await;
 
-    // Send shutdown signal to self
-    tokio::spawn(async {
-        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-        tracing::info!("[http-shutdown] Initiating server exit");
-        std::process::exit(0);
-    });
-
     let response = serde_json::json!({
         "status": "ok",
-        "message": "Shutdown initiated, VM will be stopped"
+        "message": "VM stopped, server is still running"
     });
     (StatusCode::OK, Json(response)).into_response()
 }
