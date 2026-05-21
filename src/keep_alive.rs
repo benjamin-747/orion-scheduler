@@ -1,6 +1,5 @@
 use anyhow::Result;
-use qlean::{Distro, MachineConfig, Machine, CustomImageConfig, ImageSource, ShaType};
-use std::path::PathBuf;
+use qlean::{ImageConfig, MachineConfig, Machine};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -11,61 +10,42 @@ pub struct KeepAliveMachine {
 }
 
 impl KeepAliveMachine {
-    /// Create a new VM and keep it alive
-    /// If custom_image_path is provided, use it instead of the default Debian image
-    pub async fn new(vm_name: &str, custom_image_path: Option<String>, disk_gb: Option<u32>) -> Result<Self> {
+    /// Create a new VM and keep it alive.
+    ///
+    /// `image_config` can be:
+    /// - `Some(ImageConfig)` with a local `path` + `digest` — uses custom image
+    /// - `Some(ImageConfig)` with a remote `url` + `digest` — qlean downloads it
+    /// - `None` — uses qlean's built-in Debian image
+    pub async fn new(
+        vm_name: &str,
+        image_config: Option<ImageConfig>,
+        disk_gb: Option<u32>,
+        cpus: Option<u32>,
+        memory_mb: Option<u32>,
+    ) -> Result<Self> {
         tracing::info!("[keep-alive] Creating VM: {}", vm_name);
 
         let config = MachineConfig {
+            core: cpus.unwrap_or(4),
+            mem: memory_mb.unwrap_or(8192),
             disk: disk_gb,
             ..Default::default()
         };
-        let image = if let Some(path) = custom_image_path {
-            tracing::info!("[keep-alive] Using custom image: {}", path);
+        tracing::info!("[keep-alive] VM config: cpus={}, memory_mb={}", config.core, config.mem);
 
-            // Extract directory from path
-            let image_dir = std::path::Path::new(&path).parent().unwrap_or(std::path::Path::new("."));
-            let kernel_path = image_dir.join("vmlinuz-6.12.85+deb13-amd64");
-            let initrd_path = image_dir.join("initrd.img-6.12.85+deb13-amd64");
-
-            // Compute SHA256 hash of the local image for validation (streaming, low memory)
-            let image_hash = qlean::compute_sha256_streaming(std::path::Path::new(&path)).await
-                .map_err(|e| anyhow::anyhow!("Failed to hash image: {}", e))?;
-            tracing::info!("[keep-alive] Custom image hash: {}", &image_hash[..16]);
-
-            // Compute kernel and initrd hashes (streaming)
-            let kernel_hash: Option<String> = if kernel_path.exists() {
-                qlean::compute_sha256_streaming(&kernel_path).await.ok()
+        let image = if let Some(cfg) = image_config {
+            if cfg.source.is_some() {
+                tracing::info!("[keep-alive] Using custom image (source set)");
             } else {
-                None
-            };
-            let initrd_hash: Option<String> = if initrd_path.exists() {
-                qlean::compute_sha256_streaming(&initrd_path).await.ok()
-            } else {
-                None
-            };
-
-            let image_config = CustomImageConfig {
-                image_source: ImageSource::LocalPath(PathBuf::from(&path)),
-                image_hash,
-                image_hash_type: ShaType::Sha256,
-                kernel_source: if kernel_path.exists() {
-                    Some(ImageSource::LocalPath(kernel_path))
-                } else {
-                    None
-                },
-                kernel_hash,
-                initrd_source: if initrd_path.exists() {
-                    Some(ImageSource::LocalPath(initrd_path))
-                } else {
-                    None
-                },
-                initrd_hash,
-            };
-            qlean::create_custom_image(&format!("custom-{}", vm_name), image_config).await?
+                tracing::info!("[keep-alive] Using default Debian image (no custom config)");
+            }
+            qlean::Image::new(cfg).await?
         } else {
             tracing::info!("[keep-alive] Using default Debian image");
-            qlean::create_image(Distro::Debian, "debian-13-generic-amd64").await?
+            qlean::Image::new(ImageConfig::default()
+                .with_distro(qlean::Distro::Debian)
+                .with_arch(qlean::GuestArch::Amd64))
+            .await?
         };
 
         let mut machine = Machine::new(&image, &config).await?;
@@ -117,11 +97,6 @@ impl KeepAliveMachine {
             tracing::info!("[keep-alive] VM shutdown complete");
         }
         Ok(())
-    }
-
-    /// Check if VM is still running
-    pub async fn is_alive(&self) -> bool {
-        self.machine.lock().await.is_some()
     }
 
     /// Get the VM's IP address by running hostname -I inside the VM

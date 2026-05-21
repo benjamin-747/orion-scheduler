@@ -10,6 +10,17 @@ use tokio::time::interval;
 use crate::state::AppState;
 use crate::orion_deployer;
 
+/// Image parameters that can be passed via webhook API to override config-based image selection.
+#[derive(Debug, Clone, Default)]
+pub struct ImageParams {
+    pub path: Option<String>,
+    pub url: Option<String>,
+    pub digest: Option<String>,
+    pub disk_gb: Option<u32>,
+    pub cpus: Option<u32>,
+    pub memory_mb: Option<u32>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct WebhookResponse {
     pub status: String,
@@ -22,9 +33,27 @@ pub struct WebhookResponse {
 #[derive(Debug, Deserialize)]
 pub struct GithubWebhookPayload {
     pub action: Option<String>,
-    pub workflow: Option<String>,
     /// Target environment: "aws-gitmega", "aws-gitmono", "gcp-buck2hub" (required)
     pub target: String,
+    /// Override image path (local qcow2 file). Overrides default_image from config.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_path: Option<String>,
+    /// Override image URL (remote HTTPS). Overrides default_image from config.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_url: Option<String>,
+    /// SHA256/SHA512 digest for the image (required when image_path or image_url is set).
+    /// Format: "sha256:..." or "sha512:..."
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_digest: Option<String>,
+    /// VM disk size in GB.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_disk_gb: Option<u32>,
+    /// Number of vCPUs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_cpus: Option<u32>,
+    /// VM memory in MB.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_memory_mb: Option<u32>,
 }
 
 /// GET /webhook
@@ -42,14 +71,23 @@ pub async fn webhook_post_handler(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<GithubWebhookPayload>,
 ) -> impl IntoResponse {
-    tracing::info!("Received webhook: action={:?}, workflow={:?}, target={}", payload.action, payload.workflow, payload.target);
+    tracing::info!("Received webhook: action={:?}, target={}", payload.action, payload.target);
+
+    let image_params = ImageParams {
+        path: payload.image_path.clone(),
+        url: payload.image_url.clone(),
+        digest: payload.image_digest.clone(),
+        disk_gb: payload.image_disk_gb,
+        cpus: payload.image_cpus,
+        memory_mb: payload.image_memory_mb,
+    };
 
     // Spawn the VM operation in a blocking task
     let target = payload.target.clone();
     let result = tokio::task::spawn_blocking(move || {
         // Use blocking synchronous call since VM operations are CPU-heavy
         let rt = tokio::runtime::Handle::current();
-        rt.block_on(orion_deployer::handle_update(&state, &target))
+        rt.block_on(orion_deployer::handle_update(&state, &target, Some(image_params)))
     }).await;
 
     match result {

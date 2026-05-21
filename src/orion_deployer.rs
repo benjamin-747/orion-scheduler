@@ -3,13 +3,18 @@ use std::path::PathBuf;
 use tokio::fs;
 use tracing::info;
 
+use crate::handlers::ImageParams;
 use crate::keep_alive::KeepAliveMachine;
 use crate::state::{AppState, VmInfo};
 use crate::vm_manager;
 
 /// Handle the update request from GitHub Actions (keep_alive mode)
-/// VM stays running after this call
-pub async fn handle_update(state: &AppState, target: &str) -> Result<String> {
+/// VM stays running after this call.
+///
+/// If `image_params` is `Some`, the image configuration from the webhook payload
+/// takes precedence over the `default_image` in config.
+/// If `image_params` is `None`, uses the config-based `default_image`.
+pub async fn handle_update(state: &AppState, target: &str, image_params: Option<ImageParams>) -> Result<String> {
     info!("Handling update request, target: {}", target);
 
     // Step 1: Get configuration from config store
@@ -41,34 +46,62 @@ pub async fn handle_update(state: &AppState, target: &str) -> Result<String> {
     let vm_name = format!("orion-vm-{}", chrono_lite_timestamp());
     info!("Creating new VM in keep_alive mode: {}", vm_name);
 
-    // Look up custom image path and disk size from global default_image config
-    let (custom_image_path, disk_gb) = {
-        let config = state.config.read().await;
-        if let Some(ref image_name) = config.default_image() {
-            match config.get_image_path(image_name) {
-                Some(path) => {
-                    info!("[orion-deploy] Using global default custom image '{}'", image_name);
-                    let disk_gb = config.get_image_disk(image_name);
-                    (Some(path), disk_gb)
-                }
-                None => {
-                    return Err(anyhow::anyhow!(
-                        "Custom image '{}' specified in default_image is not found in custom_images config. \
-                         Please build the buck2 image first: sudo /home/ubuntu/orion-scheduler/scripts/build-custom-image.sh",
-                        image_name
-                    ));
-                }
+    // Step 3: Build ImageConfig from webhook params (API is the only source of truth)
+    let (image_config, disk_gb, cpus, memory_mb) = match &image_params {
+        Some(params) => {
+            let path = params.path.as_ref();
+            let url = params.url.as_ref();
+            let digest = params.digest.as_ref();
+
+            // Validate: path and url are mutually exclusive
+            if path.is_some() && url.is_some() {
+                return Err(anyhow::anyhow!("image_path and image_url cannot both be set"));
             }
-        } else {
-            return Err(anyhow::anyhow!(
-                "default_image is not configured. Please either:\n\
-                 1. Set default_image in target_config.json to a custom image name, or\n\
-                 2. Build the buck2 image: sudo /home/ubuntu/orion-scheduler/scripts/build-custom-image.sh"
-            ));
+
+            // Validate: if either path or url is set, digest is required
+            if (path.is_some() || url.is_some()) && digest.is_none() {
+                return Err(anyhow::anyhow!(
+                    "image_digest is required when image_path or image_url is provided"
+                ));
+            }
+
+            let img_cfg = match (url, path, digest) {
+                (Some(url), None, Some(digest)) => {
+                    info!("[orion-deploy] Using image from URL: {}", url);
+                    Some(
+                        qlean::ImageConfig::default()
+                            .with_distro(qlean::Distro::Debian)
+                            .with_arch(qlean::GuestArch::Amd64)
+                            .with_source(url.clone())
+                            .with_digest(digest.clone()),
+                    )
+                }
+                (None, Some(path), Some(digest)) => {
+                    info!("[orion-deploy] Using image from path: {}", path);
+                    Some(
+                        qlean::ImageConfig::default()
+                            .with_distro(qlean::Distro::Debian)
+                            .with_arch(qlean::GuestArch::Amd64)
+                            .with_source(path.clone())
+                            .with_digest(digest.clone()),
+                    )
+                }
+                (None, None, _) => {
+                    info!("[orion-deploy] No image source in params, using default Debian image");
+                    None
+                }
+                _ => unreachable!(),
+            };
+
+            (img_cfg, params.disk_gb, params.cpus, params.memory_mb)
+        }
+        None => {
+            info!("[orion-deploy] No image params provided, using default Debian image");
+            (None, None, None, None)
         }
     };
 
-    let machine = KeepAliveMachine::new(&vm_name, custom_image_path.clone(), disk_gb).await?;
+    let machine = KeepAliveMachine::new(&vm_name, image_config, disk_gb, cpus, memory_mb).await?;
 
     // Step 4: Inject SSH keys for debugging
     vm_manager::inject_ssh_keys(&machine).await?;

@@ -5,13 +5,13 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.102"
-qlean = "0.2.3"
+qlean = { git = "https://github.com/buck2hub/qlean" }
 tokio = { version = "1.52.3", features = ["macros", "rt"] }
 
 # HTTP server
 axum = { version = "0.8.9", features = ["macros"] }
 tower = "0.5.3"
-tower-http = { version = "0.6.10", features = ["cors", "trace"] }
+tower-http = { version = "0.6.11", features = ["cors", "trace"] }
 hyper = "1.3"
 http-body-util = "0.1"
 

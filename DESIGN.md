@@ -189,21 +189,32 @@ Webhook 端点健康检查。
 
 接收来自 GitHub Actions 的更新请求。
 
-**请求体**（GitHub Actions 格式）：
+**请求体**：
 
 ```json
 {
   "action": "requested",
-  "workflow": "deploy.yml",
-  "target": "aws-gitmega"
+  "target": "aws-gitmega",
+  "image_path": "/path/to/image.qcow2",
+  "image_digest": "sha256:abcd1234...",
+  "image_disk_gb": 20,
+  "image_cpus": 4,
+  "image_memory_mb": 8192
 }
 ```
 
-| 字段         | 类型     | 描述                                                  |
-| ---------- | ------ | --------------------------------------------------- |
-| `action`   | string | GitHub Actions 事件类型                                 |
-| `workflow` | string | 工作流名称                                               |
-| `target`   | string | 目标环境：`aws-gitmega`、`aws-gitmono`、`gcp-buck2hub`（必填） |
+| 字段 | 类型 | 必填 | 描述 |
+| --- | --- | --- | --- |
+| `action` | string | 否 | GitHub Actions 事件类型，仅记日志 |
+| `target` | string | 是 | 目标环境，必须在 `target_config.json` 的 `targets` 中存在 |
+| `image_path` | string | 否 | 本地 qcow2 镜像路径，与 `image_url` 互斥 |
+| `image_url` | string | 否 | 远程 HTTPS 镜像 URL，与 `image_path` 互斥 |
+| `image_digest` | string | 否* | SHA256/SHA512 hash（`sha256:...` 或 `sha512:...`）。`image_path` 或 `image_url` 存在时必填 |
+| `image_disk_gb` | u32 | 否 | VM 磁盘大小（GB），默认 4 |
+| `image_cpus` | u32 | 否 | vCPU 数，默认 4 |
+| `image_memory_mb` | u32 | 否 | 内存 MB，默认 8192 |
+
+> **约束**：`image_path` 和 `image_url` 互斥，不能同时设置。提供了两者之一时 `image_digest` 必须提供。不提供任何镜像参数时使用 qlean 内置的默认 Debian 镜像。
 
 **响应**：
 
@@ -248,7 +259,7 @@ pub struct AppState {
          ↓
 [3] 检查现有 VM 并优雅关闭（如果存在）
          ↓
-[4] 创建新 VM（Debian 镜像，keep-alive 模式）
+[4] 从 webhook 请求构造 ImageConfig，创建新 VM（keep-alive 模式）
          ↓
 [5] 部署 Orion 文件到 VM
          ↓
@@ -269,9 +280,9 @@ pub struct AppState {
 
 | 阶段       | 步骤  | 操作            | 说明                                                                                 |
 | -------- | --- | ------------- | ---------------------------------------------------------------------------------- |
-| **接收请求** | 1   | 接收 webhook    | 解析 `target` 参数（必填），从配置获取对应的 `TargetConfig`                                         |
+| **接收请求** | 1   | 接收 webhook    | 解析 `target` 参数（必填），从配置获取 `TargetConfig`；解析镜像参数（`image_path`/`image_url` + `image_digest`） |
 | **清理**   | 2   | 清理旧 VM        | 优雅关闭已有 VM（调用 `machine.shutdown()`）                                                 |
-| **创建**   | 3   | 创建 VM         | 使用 `KeepAliveMachine::new()` 创建新 VM                                                |
+| **创建**   | 3   | 构造 ImageConfig  | 根据 webhook 镜像参数构造 `qlean::ImageConfig`（本地路径或远程 URL + digest）；调用 `KeepAliveMachine::new()` 创建 VM |
 | **部署**   | 4   | 创建目录          | 在 VM 内创建 `/home/orion/orion-runner/` 目录                                            |
 |          | 5   | 上传配置文件        | 通过 SFTP 上传 `run.sh`、`scorpio.toml`、`preflight.sh`、`cleanup.sh`                     |
 |          | 6   | 上传 .env 文件    | 上传 `.env.prod` 重命名为 `.env`                                                         |
@@ -304,13 +315,6 @@ orion-scheduler 将环境配置外部化为 JSON 配置文件，无需修改代�
 ```json
 {
   "log_dir": "/var/log/orion-scheduler",
-  "default_image": "buck2",
-  "custom_images": {
-    "buck2": {
-      "path": "/home/ubuntu/.local/share/qlean/images/debian-13-buck2/debian-13-buck2.qcow2",
-      "description": "Debian 13 with pre-installed buck2"
-    }
-  },
   "targets": {
     "aws-gitmega": {
       "server_ws": "wss://orion.gitmega.com/ws",
@@ -333,18 +337,13 @@ orion-scheduler 将环境配置外部化为 JSON 配置文件，无需修改代�
 
 **配置说明**：
 
-| 字段 | 类型 | 说明 |
-| --- | --- | --- |
-| `log_dir` | string | Orion 日志目录 |
-| `default_image` | string? | 全局默认自定义镜像名称（可选，引用 `custom_images`） |
-| `custom_images` | object? | 自定义镜像映射表，键为镜像名称，值为镜像配置 |
-| `custom_images[].path` | string | 镜像文件路径（qcow2） |
-| `custom_images[].description` | string? | 镜像描述 |
-| `custom_images[].disk_gb` | u32? | VM 磁盘大小（GB），默认使用镜像大小 |
-| `targets` | object | 部署目标配置 |
-| `targets[].server_ws` | string | Orion WebSocket 服务器 URL |
-| `targets[].scorpio_base_url` | string | Scorpio 基础 URL（替换 scorpio.toml 中的 base_url） |
-| `targets[].scorpio_lfs_url` | string | Scorpio LFS URL（替换 scorpio.toml 中的 lfs_url） |
+| 字段                              | 类型      | 说明                                          |
+| ------------------------------- | ------- | ------------------------------------------- |
+| `log_dir`                       | string  | Orion 日志目录                                     |
+| `targets`                       | object  | 部署目标配置                                       |
+| `targets[].server_ws`           | string  | Orion WebSocket 服务器 URL                    |
+| `targets[].scorpio_base_url`    | string  | Scorpio 基础 URL（替换 scorpio.toml 中的 base_url） |
+| `targets[].scorpio_lfs_url`     | string  | Scorpio LFS URL（替换 scorpio.toml 中的 lfs_url） |
 
 #### target 对应表
 
@@ -390,7 +389,7 @@ orion-scheduler 将环境配置外部化为 JSON 配置文件，无需修改代�
 
 #### 自定义镜像
 
-orion-scheduler 支持使用预装 buck2 的自定义镜像，可以显著加快部署速度（跳过运行时安装）。
+orion-scheduler 通过 webhook API 的镜像参数来指定 VM 启动镜像（API 是镜像配置的唯一事实来源），支持本地路径和远程 HTTPS URL 两种来源。
 
 **1. 构建自定义镜像**
 
@@ -399,13 +398,8 @@ orion-scheduler 支持使用预装 buck2 的自定义镜像，可以显著加快
 sudo /home/ubuntu/orion-scheduler/scripts/build-custom-image.sh
 ```
 
-构建过程：
-1. 复制基础镜像 `debian-13-generic-amd64.qcow2`
-2. 启动临时 VM，使用 cloud-init 在首次启动时安装 buck2
-3. 关闭 VM，捕获修改后的镜像
-4. 提取 kernel 和 initrd 文件
-
 构建产物：
+
 ```
 ~/.local/share/qlean/images/debian-13-buck2/
 ├── debian-13-buck2.qcow2   # 自定义镜像（含 buck2）
@@ -414,53 +408,37 @@ sudo /home/ubuntu/orion-scheduler/scripts/build-custom-image.sh
 └── checksums
 ```
 
-**2. 添加自定义镜像到配置**
+**2. 通过 webhook API 指定镜像**
 
-编辑 `target_config.json`，在 `custom_images` 中添加新镜像：
-
-```json
-{
-  "custom_images": {
-    "buck2": {
-      "path": "/home/ubuntu/.local/share/qlean/images/debian-13-buck2/debian-13-buck2.qcow2",
-      "description": "Debian 13 with pre-installed buck2",
-      "disk_gb": 100
-    },
-    "new-image": {
-      "path": "/path/to/new-image.qcow2",
-      "description": "Custom description",
-      "disk_gb": 50
-    }
-  }
-}
-```
-
-**3. 设置全局默认镜像**
-
-在 `default_image` 中指定默认使用的镜像：
+镜像配置通过 POST `/webhook` 请求体传入：
 
 ```json
 {
-  "default_image": "buck2",
-  ...
+  "target": "aws-gitmega",
+  "image_path": "/home/ubuntu/.local/share/qlean/images/debian-13-buck2/debian-13-buck2.qcow2",
+  "image_digest": "sha256:abcd1234...",
+  "image_disk_gb": 20,
+  "image_cpus": 4,
+  "image_memory_mb": 8192
 }
 ```
 
-所有 targets 将默认使用该镜像。如需对特定 target 使用不同镜像，可以在 target 中单独指定（暂不支持）。
+或使用远程 URL：
 
-**4. 自定义镜像是前提条件**
-
-使用 orion-scheduler 部署前，必须先准备好自定义镜像。如果 `default_image` 未配置或镜像不存在，部署时会报错：
-
+```json
+{
+  "target": "aws-gitmega",
+  "image_url": "https://artifacts.company.com/images/buck2-custom.qcow2",
+  "image_digest": "sha256:efgh5678...",
+  "image_disk_gb": 20
+}
 ```
-default_image is not configured. Please either:
-1. Set default_image in target_config.json to a custom image name, or
-2. Build the buck2 image: sudo /home/ubuntu/orion-scheduler/scripts/build-custom-image.sh
-```
 
-**原因**：运行时安装 buck2 耗时约 30 秒，且依赖网络下载。自定义镜像预装 buck2 可将部署时间缩短至约 10 秒。
-
-如需使用默认镜像 + 运行时安装，需修改代码逻辑。
+**约束**：
+- `image_path` 和 `image_url` 互斥，不能同时设置
+- 提供了 `image_path` 或 `image_url` 时必须同时提供 `image_digest`（格式 `sha256:...` 或 `sha512:...`）
+- 资源参数（`image_disk_gb`、`image_cpus`、`image_memory_mb`）可选，不提供时使用默认值（cpus: 4, memory: 8192MB）
+- 不提供任何镜像参数时，使用 qlean 内置的默认 Debian 镜像
 
 #### 实现方式
 
@@ -612,178 +590,7 @@ CONFIG_PATH=/path/to/target_config.json sudo env "PATH=$PATH" ... cargo run --re
 RUST_LOG=debug cargo run --release 2>&1 | grep -E '\[orion|webhook|vm'
 ```
 
-## 8. 测试方法
-
-### 8.1 本地调试
-
-```bash
-# 1. 构建调试版本
-cargo build
-
-# 2. 运行服务（调试模式）
-sudo env "PATH=$PATH" "RUSTUP_HOME=$RUSTUP_HOME" "CARGO_HOME=$CARGO_HOME" "HOME=$HOME" cargo run
-
-# 3. 新开终端，发送 webhook 请求
-curl -X POST http://localhost:8080/webhook \
-  -H "Content-Type: application/json" \
-  -d '{"action": "requested", "workflow": "deploy.yml", "target": "aws-gitmega"}'
-
-# 4. 检查服务状态（VM 应保持运行状态）
-curl http://localhost:8080/status
-
-# 5. 获取格式化日志（HTML 格式，带颜色，适合终端直接查看）
-curl http://localhost:8080/logs/orion
-
-# 6. 获取实时日志（JSON 格式，journalctl + orion.log）
-curl http://localhost:8080/logs/orion/live
-
-# 7. 持续监控日志（SSE 流，每 2 秒刷新，适合终端监控）
-curl -N http://localhost:8080/logs/orion/stream
-```
-
-### 8.2 API 测试
-
-```bash
-# 健康检查
-curl http://localhost:8080/health
-# 响应: {"status": "healthy", "service": "orion-scheduler"}
-
-# Webhook GET（健康检查）
-curl http://localhost:8080/webhook
-# 响应: {"status": "ok", "vm_id": null, "error": null, "orion_log_file": null}
-
-# Webhook POST（触发部署，keep-alive 模式）
-curl -X POST http://localhost:8080/webhook \
-  -H "Content-Type: application/json" \
-  -d '{"target": "gcp-buck2hub"}'
-# 响应: {"status": "ok", "vm_id": "orion-vm-xxx", "error": null, "orion_log_file": null}
-# 注意：orion_log_file 在响应中为 null，日志通过日志端点获取
-
-# 获取 VM 状态（keep-alive 模式，VM 持续运行）
-curl http://localhost:8080/status
-# 响应: {"status": "running", "vm_id": "orion-vm-xxx", "vm_ip": "192.168.221.87", "uptime_secs": 60, "log_file": "/var/log/orion-scheduler/..."}
-
-# 获取格式化日志（HTML，带颜色框线）
-curl http://localhost:8080/logs/orion
-# 响应: HTML 格式日志，适合直接 curl 查看
-
-# 获取实时 JSON 日志
-curl http://localhost:8080/logs/orion/live
-# 响应: {"status": "ok", "logs": "May 09 03:15:45 orion-runner..."}
-
-# SSE 持续监控
-curl -N http://localhost:8080/logs/orion/stream
-# 响应: SSE 事件流，每 2 秒推送格式化日志
-
-# 检查 Scorpio 挂载状态
-curl http://localhost:8080/scorpio/status
-# 响应: {"status": "ok", "directories": {...}, "mounts": "...", "orion_process": "...", "scorpio_process": "..."}
-
-# 优雅关闭（停止 VM 并退出）
-curl -X POST http://localhost:8080/shutdown
-
-# 响应: {"status": "ok", "message": "Shutdown initiated, VM will be stopped"}
-```
-
-### 8.3 日志端点对比
-
-| 端点                       | 响应格式 | 特点           | 使用场景              |
-| ------------------------ | ---- | ------------ | ----------------- |
-| `GET /logs/orion`        | HTML | 带颜色、emoji、框线 | `curl` 直接查看，终端可视化 |
-| `GET /logs/orion/live`   | JSON | 实时查询         | 程序调用，获取日志文本       |
-| `GET /logs/orion/stream` | SSE  | 每 2 秒推送      | `curl -N` 持续监控    |
-
-### 8.4 服务管理
-
-#### 停止 orion-scheduler 服务
-
-```bash
-# 停止 orion-scheduler 服务进程
-pkill -9 -f orion-scheduler
-
-# 停止所有 QEMU 进程（如果有残留的 VM）
-sudo pkill -9 -f qemu-system-x86
-
-# 验证进程已停止
-ps aux | grep -E "orion-scheduler|qemu-system" | grep -v grep
-
-# 检查端口是否释放
-fuser 8080/tcp 2>/dev/null || echo "Port 8080 is free"
-```
-
-#### 启动 orion-scheduler 服务
-
-```bash
-cd /home/ubuntu/orion-scheduler
-cargo run
-```
-
-#### 检查服务状态
-
-```bash
-# 检查 HTTP API 状态
-curl http://localhost:8080/status
-
-# 检查 orion-scheduler 进程
-ps aux | grep orion-scheduler | grep -v grep
-
-# 检查 QEMU 进程
-ps aux | grep qemu | grep -v grep
-```
-
-#### 优雅关闭服务
-
-| 操作 | VM | 服务器 | 说明 |
-|------|-----|--------|------|
-| `Ctrl+C` | 停止 | 停止 | 关闭 VM 后退出服务 |
-| SIGTERM | 停止 | 停止 | 关闭 VM 后退出服务 |
-| SIGQUIT | 停止 | 停止 | 关闭 VM 后退出服务 |
-| `POST /shutdown` | 停止 | 继续运行 | 仅关闭 VM，服务保持运行 |
-| `pkill -9 -f orion-scheduler` | - | 停止 | **不优雅**：直接杀死进程，不会关闭 VM |
-
-```bash
-# 关闭 VM，服务继续运行（推荐）
-curl -X POST http://localhost:8080/shutdown
-
-# 发送 SIGTERM 信号（关闭 VM 并停止服务）
-kill -TERM <pid>
-
-# Ctrl+C 关闭 VM 并停止服务
-# (在运行服务的终端中按 Ctrl+C)
-
-# 强制杀死进程（不优雅）
-pkill -9 -f orion-scheduler
-```
-
-### 8.5 查看日志
-
-```bash
-# 服务端日志
-RUST_LOG=debug cargo run 2>&1 | grep -E '\[orion|webhook|vm'
-
-# Orion 格式化日志（推荐 - 终端带颜色）
-curl http://localhost:8080/logs/orion
-
-# Orion 实时 SSE 流（持续刷新，Ctrl+C 退出）
-curl -N http://localhost:8080/logs/orion/stream
-
-# systemd 日志（如服务以 systemd 运行）
-journalctl -u orion-scheduler -f
-```
-
-### 8.6 常见问题排查
-
-| 问题                  | 排查方法                                               |
-| ------------------- | -------------------------------------------------- |
-| KVM 权限错误            | 检查 `/dev/kvm` 权限，确保用户在 `kvm` 组                     |
-| QEMU 网络桥接失败         | 检查 `/etc/qemu/bridge.conf` 是否配置 `allow qlbr0`      |
-| VM 启动超时             | 检查 cloud-init 是否正常，SSH 是否可连接                       |
-| Orion 启动失败          | `curl http://localhost:8080/logs/orion` 查看格式化日志    |
-| Scorpio 挂载问题        | `curl http://localhost:8080/scorpio/status` 检查挂载状态 |
-| VM 已关闭但状态显示 running | 重启服务或检查 VM 是否异常退出                                  |
-| 需要 SSH 进入 VM 调试     | Orion-scheduler 会自动注入 `/home/ubuntu/.ssh/orion_vm_access.pub` 对应的私钥访问权限。使用 `ssh -i /home/ubuntu/.ssh/orion_vm_access root@<vm-ip>` 连接      |
-
-## 9. 限制和未来工作
+## 8. 限制和未来工作
 
 - **状态持久化**：VM 状态持久化在内存中，服务重启后 VM 状态丢失
 - **安全**：没有 webhook 签名验证
