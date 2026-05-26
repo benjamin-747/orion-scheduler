@@ -30,8 +30,8 @@ curl -X POST http://localhost:8080/webhook \
     "image_path": "/home/ubuntu/.local/share/qlean/images/debian-13-buck2/debian-13-buck2.qcow2",
     "image_digest": "sha256:677ef198bb2a8a30bb3a593b1b70efb9a14f6e06a1193df47d4e028bce0445d6",
     "image_disk_gb": 20,
-    "image_cpus": 4,
-    "image_memory_mb": 8192
+    "image_cpus": 2,
+    "image_memory_mb": 4096
   }'
 
 # 1c. 发送 webhook 请求（指定远程镜像）
@@ -39,20 +39,17 @@ curl -X POST http://localhost:8080/webhook \
   -H "Content-Type: application/json" \
   -d '{
     "target": "aws-gitmega",
-    "image_url": "https://artifacts.company.com/buck2-custom.qcow2",
-    "image_digest": "sha256:efgh5678..."
+    "image_url": "https://gitmega.s3.ap-southeast-2.amazonaws.com/images/debian-13-buck2.qcow2?response-content-disposition=inline&X-Amz-Content-Sha256=UNSIGNED-PAYLOAD&X-Amz-Security-Token=IQoJb3JpZ2luX2VjEDgaDmFwLXNvdXRoZWFzdC0yIkYwRAIgQmiSRJW4dcJqZ1YlbTo64NAZipaYlDxezUtQoVpn2R4CICJxDmSVTUWvGXxGJxSVCm59TFian4l%2B95P4lRM9X5VLKtYDCAEQABoMNTM1MDAyODcyMDczIgytK%2FEFzG5xpCYPutAqswM2%2FRYbsun0%2FTUNc44myCbtG8Zl9vGxs0zoHA8PUK5yxWVugKy7wE8maQyBRsnRxj97YvDd64HDWJgy%2F6ZJRzRIkn5O4gOjOfACr2RibrAF951%2FnIz8gyiESic8DUVBV8K0xLT%2FOXOIvY9DdhwNXP5O1CG63IRE%2FEoIAEwDrJl4Fr3tW868bdzRUEiYwwclvWQ17i8Gw2xnbJ%2FLUTnuWOcoI3tECZam2VHs1Fi00YyIhTnZRmKcqirxIar8%2BGv7JrXrMd0Nup8s12zGjsZWJ%2FeNxVWzmh4A4K43enJT%2BAwHhQ%2FEfTVZh%2F4CxYXbOHTiSVVjvtpJ4QgiiQR6VyiY5Wp2UkEHguiQC8MIOemYIuZFdSoDWvs1HjofbJ13%2FdySYg1fRvlnmteJyE%2F4J6vJ83Rt3W4GeqTntKFIqC6xlhKbYx0Wektf1p%2F1qMXKFmNI%2BvIDVU5xS9Prm6NKWkUeKDBC6t%2FdxDXjzyRJNVenmGPg%2BHufyUEb2gyKDdgXxxg%2BBYK%2Bwt97tvqRh8s58khV36v8Nt55NlrWMIAi84q8AJFKtL227wDmRXl%2FZGsXBYMR776qrt8wlte50AY63wKNrXwyrKpRVq0LjQ5Rd0nklMtriQ9deJo1NNT6CR8ZJr2x17Cf3JSM1EbQwCRdHpJavob7bVJyrIhVY%2B8zIFp70XsZZWhcnd6P32ymnttMAvCQUZB%2FxcHN%2BDlzB1AtATRWtXihVq0ExD2%2BLbXCx8H0Lkdxpd87EOZ7d095DK9zFXz7FAlXlPiGGVSyQWB%2FUfQzk%2BDv1%2FInTIjjSnzYQD5dmrPwXVtbEBx6zolpTCYGyVLpnasgsFTv1nUR9c7e7POCxVjEy8WO%2FhAZwA%2FP8FDxnmlxUatyD7zTPohPWJVpymprxABhaZrUQLTL9SBuU462Wfc6sv6Mmm7RVKkIqGrDzW3OdnJtVCeYUdEhXUHlis0cbQsFzce9bM0LnynlBd67mqOyfpZdeJ531NPvgdukOzfCE2BITZ%2BjXWMDN%2F3Ndo%2FaSoC%2B9lT%2FwYnhxkMQh4cSKog3pPsvllJHNG4RILs%3D&X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=ASIAXZEFH7EE6E2HVVIM%2F20260521%2Fap-southeast-2%2Fs3%2Faws4_request&X-Amz-Date=20260521T082130Z&X-Amz-Expires=14400&X-Amz-SignedHeaders=host&X-Amz-Signature=99471e1c7bab465f0242fc9bb86aabfbdbf271d079ca0db780b9ba29503e3d86",
+    "image_digest": "sha256:677ef198bb2a8a30bb3a593b1b70efb9a14f6e06a1193df47d4e028bce0445d6",
+    "image_disk_gb": 20,
+    "image_cpus": 4,
+    "image_memory_mb": 8192
   }'
 
 # 2. 检查服务状态（VM 应保持运行状态）
 curl http://localhost:8080/status
 
-# 3. 获取格式化日志（HTML 格式，带颜色，适合终端直接查看）
-curl http://localhost:8080/logs/orion
-
-# 4. 获取实时日志（JSON 格式，journalctl + orion.log）
-curl http://localhost:8080/logs/orion/live
-
-# 5. 持续监控日志（SSE 流，每 2 秒刷新，适合终端监控）
+# 3. 持续监控日志（SSE 流，每 2 秒刷新，适合终端监控）
 curl -N http://localhost:8080/logs/orion/stream
 ```
 
@@ -104,19 +101,10 @@ curl http://localhost:8080/status
 
 | 端点                       | 响应格式 | 特点           | 使用场景              |
 | ------------------------ | ---- | ------------ | ----------------- |
-| `GET /logs/orion`        | HTML | 带颜色、emoji、框线 | `curl` 直接查看，终端可视化 |
-| `GET /logs/orion/live`   | JSON | 实时查询         | 程序调用，获取日志文本       |
 | `GET /logs/orion/stream` | SSE  | 每 2 秒推送      | `curl -N` 持续监控    |
 
 
 ```bash
-# 获取格式化日志（HTML，带颜色框线）
-curl http://localhost:8080/logs/orion
-
-# 获取实时 JSON 日志
-curl http://localhost:8080/logs/orion/live
-
-# SSE 持续监控
 curl -N http://localhost:8080/logs/orion/stream
 ```
 
@@ -202,9 +190,6 @@ pkill -9 -f orion-scheduler
 # 服务端日志
 RUST_LOG=debug cargo run 2>&1 | grep -E '\[orion|webhook|vm'
 
-# Orion 格式化日志（推荐 - 终端带颜色）
-curl http://localhost:8080/logs/orion
-
 # Orion 实时 SSE 流（持续刷新，Ctrl+C 退出）
 curl -N http://localhost:8080/logs/orion/stream
 
@@ -212,7 +197,37 @@ curl -N http://localhost:8080/logs/orion/stream
 journalctl -u orion-scheduler -f
 ```
 
-## 5. 常见问题排查
+## 5. 构建镜像并上传到 S3
+
+### 5.1 构建本地镜像
+
+```bash
+sudo modprobe nbd max_part=8
+sudo bash /home/ubuntu/orion-scheduler/scripts/build-custom-image.sh
+```
+
+构建完成后会输出：
+
+```
+sha256:<镜像SHA256值>
+```
+
+### 5.2 上传到 S3
+
+```bash
+# 上传镜像到 S3
+aws s3 cp /home/ubuntu/.local/share/qlean/images/debian-13-buck2/debian-13-buck2.qcow2 \
+  s3://gitmega/images/debian-13-buck2.qcow2
+
+# 上传时显示进度
+aws s3 cp /home/ubuntu/.local/share/qlean/images/debian-13-buck2/debian-13-buck2.qcow2 \
+  s3://gitmega/images/debian-13-buck2.qcow2 --progress
+
+```
+
+> **注意**：`image_digest` 使用构建脚本输出的 `sha256:<hex>` 值（上传前本地文件的 hash），上传后内容不变 hash 保持一致。
+
+## 6. 常见问题排查
 
 
 | 问题                  | 排查方法                                                                                                                                  |
@@ -220,7 +235,7 @@ journalctl -u orion-scheduler -f
 | KVM 权限错误            | 检查 `/dev/kvm` 权限，确保用户在 `kvm` 组                                                                                                        |
 | QEMU 网络桥接失败         | 检查 `/etc/qemu/bridge.conf` 是否配置 `allow qlbr0`                                                                                         |
 | VM 启动超时             | 检查 cloud-init 是否正常，SSH 是否可连接                                                                                                          |
-| Orion 启动失败          | `curl http://localhost:8080/logs/orion` 查看格式化日志                                                                                       |
+| Orion 启动失败          | `curl -N http://localhost:8080/logs/orion/stream` 实时查看日志                                                                                     |
 | Scorpio 挂载问题        | `curl http://localhost:8080/scorpio/status` 检查挂载状态                                                                                    |
 | VM 已关闭但状态显示 running | 重启服务或检查 VM 是否异常退出                                                                                                                     |
 | 需要 SSH 进入 VM 调试     | Orion-scheduler 会自动注入 `/home/ubuntu/.ssh/orion_vm_access.pub` 对应的私钥访问权限。使用 `ssh -i /home/ubuntu/.ssh/orion_vm_access root@<vm-ip>` 连接 |

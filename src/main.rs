@@ -65,8 +65,6 @@ async fn main() -> anyhow::Result<()> {
         .route("/webhook", axum::routing::post(handlers::webhook_post_handler))
         .route("/health", axum::routing::get(handlers::health_handler))
         .route("/status", axum::routing::get(handlers::status_handler))
-        .route("/logs/orion", axum::routing::get(handlers::logs_handler))
-        .route("/logs/orion/live", axum::routing::get(handlers::logs_live_handler))
         .route("/logs/orion/stream", axum::routing::get(handlers::logs_stream_handler))
         .route("/scorpio/status", axum::routing::get(handlers::scorpio_status_handler))
         .route("/scorpio/config", axum::routing::get(handlers::scorpio_config_handler))

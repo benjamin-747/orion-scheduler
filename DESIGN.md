@@ -50,7 +50,7 @@ GitHub Actions  --webhook-->  orion-scheduler  --qlean-->  QEMU/KVM VM
 | 组件                  | 描述                                                                                                                   |
 | ------------------- | -------------------------------------------------------------------------------------------------------------------- |
 | `main.rs`           | 使用 axum 的 HTTP 服务器入口，支持优雅关闭                                                                                          |
-| `handlers.rs`       | HTTP 请求处理器：/webhook, /health, /status, /logs/orion, /logs/orion/live, /logs/orion/stream, /scorpio/status, /shutdown |
+| `handlers.rs`       | HTTP 请求处理器：/webhook, /health, /status, /logs/orion/stream, /scorpio/status, /shutdown |
 | `state.rs`          | 用于跟踪 VM 生命周期的 AppState                                                                                               |
 | `vm_manager.rs`     | VM 部署操作（上传文件、替换环境变量、启动服务）                                                                                            |
 | `orion_deployer.rs` | Orion 部署编排，协调 VM 操作                                                                                                  |
@@ -85,48 +85,6 @@ GitHub Actions  --webhook-->  orion-scheduler  --qlean-->  QEMU/KVM VM
 {"status": "no_vm", "vm_id": null, "vm_ip": null}
 ```
 
-### GET /logs/orion
-
-获取格式化后的 Orion 日志（适合终端查看）。
-
-**响应**（成功）：返回 HTML 格式的带颜色日志，带框线和 emoji 标识
-
-```
-╔══════════════════════════════════════════════════════════════════════════════╗
-║                        ORION STARTUP LOGS                                  ║
-╚══════════════════════════════════════════════════════════════════════════════╝
-
-  ✅ May 09 06:39:27 qlean-vm systemd[1]: Starting orion-runner.service...
-  🔍 May 09 06:39:27 qlean-vm preflight.sh[801]: ==> [预检] 检查 /dev/fuse ...
-  🧹 May 09 06:39:27 qlean-vm cleanup.sh[804]: ==> [清理] 停止旧进程...
-  ...
-```
-
-**响应**（无 VM）：返回 JSON
-
-```json
-{"status": "no_vm", "error": "No VM is currently running"}
-```
-
-### GET /logs/orion/live
-
-获取 VM 中 Orion 的实时日志（journalctl + orion.log），返回 JSON 格式。
-
-**响应**（成功）：
-
-```json
-{
-  "status": "ok",
-  "logs": "May 09 06:39:27 qlean-vm systemd[1]: Starting orion-runner.service...\n..."
-}
-```
-
-**响应**（无 VM）：
-
-```json
-{"status": "error", "error": "No VM is currently running"}
-```
-
 ### GET /logs/orion/stream
 
 SSE 流式端点，每 2 秒推送一次格式化日志。
@@ -138,7 +96,7 @@ SSE 流式端点，每 2 秒推送一次格式化日志。
 curl -N http://localhost:8080/logs/orion/stream
 ```
 
-**响应**：SSE 事件流，格式同 `/logs/orion`
+**响应**：SSE 事件流，每 2 秒推送 journalctl 和 orion.log 的新增内容
 
 ### POST /shutdown
 
@@ -154,25 +112,6 @@ curl -X POST http://localhost:8080/shutdown
 
 ```json
 {"status": "ok", "message": "Shutdown initiated, VM will be stopped"}
-```
-
-### GET /logs/orion/live
-
-获取 VM 中 Orion 的实时日志（journalctl + orion.log），返回 JSON 格式。
-
-**响应**（成功）：
-
-```json
-{
-  "status": "ok",
-  "logs": "May 09 06:39:27 qlean-vm systemd[1]: Starting orion-runner.service...\norion-runner[797]: ==> [预检] 检查 /dev/fuse...\n..."
-}
-```
-
-**响应**（无 VM）：
-
-```json
-{"status": "error", "error": "No VM is currently running"}
 ```
 
 ### GET /webhook
@@ -248,7 +187,7 @@ pub struct AppState {
 }
 ```
 
-**Keep-alive 模式**：VM 在部署后保持运行状态，可通过 `GET /logs/orion/live` 实时获取日志。
+**Keep-alive 模式**：VM 在部署后保持运行状态，可通过 `GET /logs/orion/stream` 实时获取日志。
 
 ### 4.2 生命周期
 
@@ -274,7 +213,7 @@ pub struct AppState {
 [10] 返回成功响应
 ```
 
-**注意**：VM 在部署后保持运行状态，可通过 `GET /logs/orion/live` 实时获取日志。
+**注意**：VM 在部署后保持运行状态，可通过 `GET /logs/orion/stream` 实时获取日志。
 
 ### 4.3 详细步骤
 

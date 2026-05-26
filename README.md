@@ -93,8 +93,6 @@ sequenceDiagram
 | GET | `/webhook` | webhook 端点连通性检查 | `{ "status": "ok", "vm_id": null, ... }` |
 | POST | `/webhook` | 触发部署，body 见下方详情 | `{ "status": "ok", "vm_id", "orion_log_file" }` |
 | GET | `/status` | 当前 VM 状态 | `{ "status": "running"\|"no_vm", vm_id, vm_ip, uptime_secs }` |
-| GET | `/logs/orion` | 启动期日志（HTML 带颜色，适合 `curl` 看） | HTML |
-| GET | `/logs/orion/live` | 实时拉取 `journalctl -u orion-runner` + `orion.log` | `{ "status", "logs" }` |
 | GET | `/logs/orion/stream` | SSE 流，每 2 秒推送新增日志 | `text/event-stream` |
 | GET | `/scorpio/status` | Scorpio FUSE 挂载点、目录、进程状态 | JSON |
 | GET | `/scorpio/config` | 直接读 VM 内 `/home/orion/orion-runner/scorpio.toml` | `{ "path", "content" }` |

@@ -1,6 +1,6 @@
 use axum::{
     extract::State,
-    response::{Json, Html, IntoResponse, sse::{Sse, Event}},
+    response::{Json, IntoResponse, sse::{Sse, Event}},
     http::StatusCode,
 };
 use serde::{Deserialize, Serialize};
@@ -151,66 +151,6 @@ pub async fn status_handler(
     }
 }
 
-/// GET /logs/orion - Read Orion logs with formatting (text output for terminal)
-pub async fn logs_handler(
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
-    match orion_deployer::get_status(&state).await {
-        Some(vm) => {
-            if let Some(log_file) = &vm.log_file {
-                match tokio::fs::read_to_string(log_file).await {
-                    Ok(contents) => {
-                        let formatted = format_logs(&contents);
-                        Html(formatted).into_response()
-                    }
-                    Err(e) => {
-                        let response = serde_json::json!({
-                            "status": "error",
-                            "error": format!("Failed to read log file: {}", e)
-                        });
-                        (StatusCode::INTERNAL_SERVER_ERROR, Json(response)).into_response()
-                    }
-                }
-            } else {
-                let response = serde_json::json!({
-                    "status": "no_log_file",
-                    "error": "No log file available for this VM"
-                });
-                (StatusCode::NOT_FOUND, Json(response)).into_response()
-            }
-        }
-        None => {
-            let response = serde_json::json!({
-                "status": "no_vm",
-                "error": "No VM is currently running"
-            });
-            (StatusCode::NOT_FOUND, Json(response)).into_response()
-        }
-    }
-}
-
-/// Format logs for terminal display with colors and sections
-fn format_logs(logs: &str) -> String {
-    let mut output = String::new();
-    output.push_str("\n╔══════════════════════════════════════════════════════════════════════════════╗\n");
-    output.push_str("║                        ORION STARTUP LOGS                                  ║\n");
-    output.push_str("╚══════════════════════════════════════════════════════════════════════════════╝\n\n");
-
-    let lines: Vec<&str> = logs.lines().collect();
-
-    for line in &lines {
-        let formatted = format_log_line(line);
-        output.push_str(&formatted);
-        output.push('\n');
-    }
-
-    output.push_str("\n╔══════════════════════════════════════════════════════════════════════════════╗\n");
-    output.push_str("║                         END OF LOGS                                        ║\n");
-    output.push_str("╚══════════════════════════════════════════════════════════════════════════════╝\n");
-
-    output
-}
-
 /// Format a single log line with colors based on content type
 fn format_log_line(line: &str) -> String {
     // Remove ANSI escape codes for clean formatting
@@ -284,28 +224,6 @@ fn strip_ansi(text: &str) -> String {
         }
     }
     result
-}
-
-/// GET /logs/orion/live - Get live Orion logs from running VM
-pub async fn logs_live_handler(
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
-    match orion_deployer::get_live_logs(&state).await {
-        Ok(logs) => {
-            let response = serde_json::json!({
-                "status": "ok",
-                "logs": logs
-            });
-            (StatusCode::OK, Json(response)).into_response()
-        }
-        Err(e) => {
-            let response = serde_json::json!({
-                "status": "error",
-                "error": e.to_string()
-            });
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(response)).into_response()
-        }
-    }
 }
 
 /// GET /scorpio/status - Check Scorpio mount status and directories
