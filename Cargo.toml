@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.102"
-qlean = { git = "https://github.com/buck2hub/qlean" }
+qlean = { version = "0.3.0" }
 tokio = { version = "1.52.3", features = ["macros", "rt"] }
 
 # HTTP server
