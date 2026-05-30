@@ -1,3 +1,5 @@
+> **项目已迁移至 [mega/orion-scheduler](https://github.com/web3infra-foundation/mega/tree/main/orion-scheduler)**，此仓库已不再维护。
+
 # Orion Scheduler
 
 接收 GitHub Actions webhook 的常驻服务：用 [qlean](https://crates.io/crates/qlean) 拉起 QEMU/KVM microVM，把 Orion 二进制和 runner 配置 SFTP 进去，启动 `orion-runner` systemd 服务，并保持 VM 长期运行以便实时拉取日志。
